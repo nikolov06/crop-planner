@@ -1,0 +1,96 @@
+import { useEffect, useState } from 'react'
+import type { Session } from '@supabase/supabase-js'
+import { supabase, configured } from './lib/supabase'
+import Login from './Login'
+import Rotation from './pages/Rotation'
+import Nomenclatures from './pages/Nomenclatures'
+import Placeholder from './pages/Placeholder'
+import SeedPlanning from './pages/SeedPlanning'
+
+type PageKey = 'rotation' | 'seeds' | 'fert' | 'prz' | 'nomenclatures'
+
+const NAV: { key: PageKey; label: string; sepBefore?: boolean }[] = [
+  { key: 'rotation', label: 'Сеитбооборот' },
+  { key: 'seeds', label: 'Планиране семена' },
+  { key: 'fert', label: 'Планиране торове' },
+  { key: 'prz', label: 'Продукти за растителна защита' },
+  { key: 'nomenclatures', label: 'Номенклатури', sepBefore: true },
+]
+
+function pageFromHash(): PageKey {
+  const k = window.location.hash.replace('#/', '') as PageKey
+  return NAV.some((n) => n.key === k) ? k : 'rotation'
+}
+
+export default function App() {
+  const [session, setSession] = useState<Session | null>(null)
+  const [ready, setReady] = useState(false)
+  const [page, setPage] = useState<PageKey>(pageFromHash())
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session)
+      setReady(true)
+    })
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s))
+    return () => sub.subscription.unsubscribe()
+  }, [])
+
+  useEffect(() => {
+    const onHash = () => setPage(pageFromHash())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+
+  if (!configured) {
+    return (
+      <div className="login">
+        <div className="login-card">
+          <h1>Crop Planner</h1>
+          <div className="banner err">
+            Липсват настройките за връзка с базата. Създай файл <code>web/.env.local</code> по образеца{' '}
+            <code>.env.example</code> (VITE_SUPABASE_URL и VITE_SUPABASE_ANON_KEY) и рестартирай приложението.
+          </div>
+        </div>
+      </div>
+    )
+  }
+  if (!ready) return null
+  if (!session) return <Login />
+
+  const go = (k: PageKey) => {
+    window.location.hash = `#/${k}`
+  }
+
+  return (
+    <div className="shell">
+      <nav className="sidebar" aria-label="Основна навигация">
+        <div className="brand">Crop Planner</div>
+        {NAV.map((n) => (
+          <div key={n.key} style={{ display: 'contents' }}>
+            {n.sepBefore && <div className="nav-sep" />}
+            <button
+              className="nav-item"
+              aria-current={page === n.key ? 'page' : undefined}
+              onClick={() => go(n.key)}
+            >
+              {n.label}
+            </button>
+          </div>
+        ))}
+        <div className="nav-spacer" />
+        <div className="nav-user">{session.user.email}</div>
+        <button className="nav-item" onClick={() => supabase.auth.signOut()}>
+          Изход
+        </button>
+      </nav>
+      <main className="content">
+        {page === 'rotation' && <Rotation />}
+        {page === 'seeds' && <SeedPlanning />}
+        {page === 'fert' && <Placeholder title="Планиране торове" />}
+        {page === 'prz' && <Placeholder title="Продукти за растителна защита" />}
+        {page === 'nomenclatures' && <Nomenclatures />}
+      </main>
+    </div>
+  )
+}
