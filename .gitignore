@@ -1,7 +1,13 @@
 .env*
+!.env.example
 .env.local
 import/
 .DS_Store
 supabase/.temp/
 web/node_modules/
 web/dist/
+node_modules/
+dist/
+import_*.sql
+env.local.txt
+*.xlsx
