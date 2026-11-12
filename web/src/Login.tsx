@@ -12,7 +12,7 @@ export default function Login() {
     setBusy(true)
     setError(null)
     const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) setError('Грешен имейл или парола.')
+    if (error) setError(`Грешка при вход: ${error.message}`)
     setBusy(false)
   }
 
