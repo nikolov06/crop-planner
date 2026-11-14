@@ -48,8 +48,9 @@ export default function App() {
         <div className="login-card">
           <h1>Crop Planner</h1>
           <div className="banner err">
-            Липсват настройките за връзка с базата. Създай файл <code>web/.env.local</code> по образеца{' '}
-            <code>.env.example</code> (VITE_SUPABASE_URL и VITE_SUPABASE_ANON_KEY) и рестартирай приложението.
+            Липсват или са невалидни настройките за връзка с базата (<code>VITE_SUPABASE_URL</code> и{' '}
+            <code>VITE_SUPABASE_ANON_KEY</code>). Локално ги задай в <code>web/.env.local</code> по образеца{' '}
+            <code>.env.example</code>; във Vercel — в Environment Variables и направи Redeploy.
           </div>
         </div>
       </div>
