@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { fmtArea, fmtInt, fmtRate, cropColor, cropLabel } from '../lib/format'
 import { ColumnPicker, useHiddenCols } from '../lib/columns'
+import { FieldAddModal, FieldDeleteModal, FieldEditModal } from './RotationEdit'
 
 type SeedRow = { variety: string | null; reproduction: string | null; area_da: number | null; rate: number | null; rate_basis: string | null; origin: string | null; kg_da?: number | null }
 type AliasRow = { name: string; isak_number: string | null; area_da: number | null }
@@ -98,6 +99,10 @@ export default function Rotation() {
   const [sort, setSort] = useState<{ key: ColKey; dir: 1 | -1 }>({ key: 'field_name', dir: 1 })
   const [openId, setOpenId] = useState<string | null>(null)
   const colPrefs = useHiddenCols('rotation')
+  const [reloadKey, setReloadKey] = useState(0)
+  const [modal, setModal] = useState<null | { kind: 'add' } | { kind: 'edit' | 'del'; id: string; name: string }>(null)
+  const [flash, setFlash] = useState<string | null>(null)
+  const done = (m: string) => { setModal(null); setFlash(m); setLoading(true); setReloadKey((k) => k + 1) }
 
   useEffect(() => {
     let cancelled = false
@@ -160,7 +165,7 @@ export default function Rotation() {
       if (!cancelled) setLoading(false)
     })()
     return () => { cancelled = true }
-  }, [])
+  }, [reloadKey])
 
   const options = useMemo(() => {
     const o: Partial<Record<ColKey, string[]>> = {}
@@ -250,7 +255,12 @@ export default function Rotation() {
           <input className="input" type="search" value={q} onChange={(e) => setQ(e.target.value)} />
         </label>
         <button className="btn outline" onClick={clearAll} disabled={activeCount === 0}>Изчисти филтрите{activeCount ? ` (${activeCount})` : ''}</button>
+        <button className="btn" onClick={() => setModal({ kind: 'add' })}>+ Ново БЗС</button>
       </div>
+      {flash && <div className="banner" role="status" onClick={() => setFlash(null)}>{flash}</div>}
+      {modal?.kind === 'add' && <FieldAddModal onClose={() => setModal(null)} onDone={done} />}
+      {modal?.kind === 'edit' && <FieldEditModal fieldId={modal.id} fieldName={modal.name} onClose={() => setModal(null)} onDone={done} />}
+      {modal?.kind === 'del' && <FieldDeleteModal fieldId={modal.id} fieldName={modal.name} onClose={() => setModal(null)} onDone={done} />}
 
       <div className="card">
         <table className="grid">
@@ -301,6 +311,10 @@ export default function Rotation() {
                       <span className="name">
                         <svg className="chev" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
                         {r.field_name}
+                      </span>
+                      <span style={{ float: 'right', whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
+                        <button className="btn outline" style={{ minHeight: 28, padding: "0 7px" }} title="Редакция" aria-label={`Редакция ${r.field_name}`} onClick={() => setModal({ kind: 'edit', id: r.field_id, name: r.field_name })}>✎</button>{' '}
+                        <button className="btn outline" style={{ minHeight: 28, padding: "0 7px" }} title="Изтриване" aria-label={`Изтриване ${r.field_name}`} onClick={() => setModal({ kind: 'del', id: r.field_id, name: r.field_name })}>🗑</button>
                       </span>
                     </td>
                     {vis('company') && (<td>{r.company_name ?? <span className="empty">—</span>}</td>)}
