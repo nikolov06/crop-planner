@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { fmtArea, fmtInt, fmtRate, cropColor, cropLabel } from '../lib/format'
 import { ColumnPicker, useHiddenCols } from '../lib/columns'
 import { FieldAddModal, FieldDeleteModal, FieldEditModal } from './RotationEdit'
+import { INLINE_COLS, InlineArea, InlineCrop, InlineName, InlineTillage, useInlineEdit, type InlineKey, type RowPatch } from './RotationInline'
 
 type SeedRow = { variety: string | null; reproduction: string | null; area_da: number | null; rate: number | null; rate_basis: string | null; origin: string | null; kg_da?: number | null }
 type AliasRow = { name: string; isak_number: string | null; area_da: number | null }
@@ -102,7 +103,14 @@ export default function Rotation() {
   const [reloadKey, setReloadKey] = useState(0)
   const [modal, setModal] = useState<null | { kind: 'add' } | { kind: 'edit' | 'del'; id: string; name: string }>(null)
   const [flash, setFlash] = useState<string | null>(null)
-  const done = (m: string) => { setModal(null); setFlash(m); setLoading(true); setReloadKey((k) => k + 1) }
+  const [flashErr, setFlashErr] = useState(false)
+  const [unlocked, setUnlocked] = useState<Set<InlineKey>>(new Set())
+  const [lockOpen, setLockOpen] = useState(false)
+  const patchRow = (id: string, p: RowPatch) => setRows((rs) => rs.map((x) => (x.field_id === id ? { ...x, ...p } as Row : x)))
+  const ie = useInlineEdit(unlocked.size > 0, patchRow, (m, isErr) => { setFlash(m); setFlashErr(isErr) })
+  const unl = (k: InlineKey) => unlocked.has(k) && ie.ready
+  const stop = (e: { stopPropagation: () => void }) => e.stopPropagation()
+  const done = (m: string) => { setModal(null); setFlashErr(false); setFlash(m); setLoading(true); setReloadKey((k) => k + 1) }
 
   useEffect(() => {
     let cancelled = false
@@ -255,11 +263,34 @@ export default function Rotation() {
           <input className="input" type="search" value={q} onChange={(e) => setQ(e.target.value)} />
         </label>
         <button className="btn outline" onClick={clearAll} disabled={activeCount === 0}>Изчисти филтрите{activeCount ? ` (${activeCount})` : ''}</button>
+        <span style={{ position: 'relative' }}>
+          <button className={unlocked.size ? 'btn' : 'btn outline'} onClick={() => setLockOpen((o) => !o)} aria-expanded={lockOpen}>{unlocked.size ? `🔓 Редакция в таблицата (${unlocked.size})` : '🔒 Редакция в таблицата'}</button>
+          {lockOpen && (
+            <>
+              <div style={{ position: 'fixed', inset: 0, zIndex: 40 }} onClick={() => setLockOpen(false)} />
+              <div className="card" style={{ position: 'absolute', right: 0, top: '110%', zIndex: 41, padding: 12, minWidth: 260, display: 'grid', gap: 6 }} role="dialog" aria-label="Отключване на колони за редакция">
+                <strong>Отключи колони за редакция</strong>
+                {INLINE_COLS.map((c) => (
+                  <label key={c.key} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input type="checkbox" checked={unlocked.has(c.key)} onChange={() => setUnlocked((u) => { const n = new Set(u); if (n.has(c.key)) n.delete(c.key); else n.add(c.key); return n })} /> {c.label}
+                  </label>
+                ))}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn outline" onClick={() => setUnlocked(new Set(INLINE_COLS.map((c) => c.key)))}>Всички</button>
+                  <button className="btn outline" onClick={() => setUnlocked(new Set())} disabled={!unlocked.size}>Заключи всички</button>
+                </div>
+                <span className="muted" style={{ fontSize: 12 }}>Промените се записват веднага, клетка по клетка. Смяна на култура изтрива сортовете за сезона (с потвърждение).</span>
+              </div>
+            </>
+          )}
+        </span>
         <button className="btn" onClick={() => setModal({ kind: 'add' })}>+ Ново БЗС</button>
       </div>
-      {flash && <div className="banner" role="status" onClick={() => setFlash(null)}>{flash}</div>}
+      {unlocked.size > 0 && !ie.ready && !ie.loadErr && <div className="banner">Зареждане на данните за редакция…</div>}
+      {ie.loadErr && <div className="banner err" role="alert">Редакцията не е достъпна: {ie.loadErr}</div>}
+      {flash && <div className={flashErr ? 'banner err' : 'banner'} role={flashErr ? 'alert' : 'status'} onClick={() => setFlash(null)}>{flash}</div>}
       {modal?.kind === 'add' && <FieldAddModal onClose={() => setModal(null)} onDone={done} />}
-      {modal?.kind === 'edit' && <FieldEditModal fieldId={modal.id} fieldName={modal.name} onClose={() => setModal(null)} onDone={done} />}
+      {modal?.kind === 'edit' && <FieldEditModal fieldId={modal.id} fieldName={modal.name} onClose={() => setModal(null)} onDone={done} onDelete={() => setModal({ kind: 'del', id: modal.id, name: modal.name })} />}
       {modal?.kind === 'del' && <FieldDeleteModal fieldId={modal.id} fieldName={modal.name} onClose={() => setModal(null)} onDone={done} />}
 
       <div className="card">
@@ -275,6 +306,7 @@ export default function Rotation() {
                   )}
                 </th>
               ))}
+              <th aria-label="Действия" style={{ width: 44 }} />
             </tr>
             <tr className="filter-row">
               {shownCols.map((c) => (
@@ -297,6 +329,7 @@ export default function Rotation() {
                   )}
                 </th>
               ))}
+              <th />
             </tr>
           </thead>
           <tbody>
@@ -310,31 +343,30 @@ export default function Rotation() {
                     <td>
                       <span className="name">
                         <svg className="chev" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                        {r.field_name}
-                      </span>
-                      <span style={{ float: 'right', whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
-                        <button className="btn outline" style={{ minHeight: 28, padding: "0 7px" }} title="Редакция" aria-label={`Редакция ${r.field_name}`} onClick={() => setModal({ kind: 'edit', id: r.field_id, name: r.field_name })}>✎</button>{' '}
-                        <button className="btn outline" style={{ minHeight: 28, padding: "0 7px" }} title="Изтриване" aria-label={`Изтриване ${r.field_name}`} onClick={() => setModal({ kind: 'del', id: r.field_id, name: r.field_name })}>🗑</button>
+                        {unl('field_name') ? <span onClick={stop}><InlineName ie={ie} r={r} /></span> : r.field_name}
                       </span>
                     </td>
                     {vis('company') && (<td>{r.company_name ?? <span className="empty">—</span>}</td>)}
                     {vis('base') && (<td>{r.farm_base_name ?? <span className="empty">—</span>}</td>)}
-                    {vis('area') && (<td className="num">{fmtArea(r.area_da)}</td>)}
-                    {vis('crop') && (<td><CropCell crop={r.crop} main />{(r.n_second_crops ?? 0) > 0 && <> <span className="chip">+{r.n_second_crops}</span></>}</td>)}
-                    {vis('p1') && (<td><CropCell crop={r.crop_prev1} /></td>)}
-                    {vis('p2') && (<td><CropCell crop={r.crop_prev2} /></td>)}
-                    {vis('p3') && (<td><CropCell crop={r.crop_prev3} /></td>)}
-                    {vis('p4') && (<td><CropCell crop={r.crop_prev4} /></td>)}
+                    {vis('area') && (<td className="num" onClick={unl('area') ? stop : undefined}>{unl('area') ? <InlineArea ie={ie} r={r} /> : fmtArea(r.area_da)}</td>)}
+                    {vis('crop') && (<td onClick={unl('crop') ? stop : undefined}>{unl('crop') ? <InlineCrop ie={ie} r={r} off={0} /> : <><CropCell crop={r.crop} main />{(r.n_second_crops ?? 0) > 0 && <> <span className="chip">+{r.n_second_crops}</span></>}</>}</td>)}
+                    {vis('p1') && (<td onClick={unl('p1') ? stop : undefined}>{unl('p1') ? <InlineCrop ie={ie} r={r} off={1} /> : <CropCell crop={r.crop_prev1} />}</td>)}
+                    {vis('p2') && (<td onClick={unl('p2') ? stop : undefined}>{unl('p2') ? <InlineCrop ie={ie} r={r} off={2} /> : <CropCell crop={r.crop_prev2} />}</td>)}
+                    {vis('p3') && (<td onClick={unl('p3') ? stop : undefined}>{unl('p3') ? <InlineCrop ie={ie} r={r} off={3} /> : <CropCell crop={r.crop_prev3} />}</td>)}
+                    {vis('p4') && (<td onClick={unl('p4') ? stop : undefined}>{unl('p4') ? <InlineCrop ie={ie} r={r} off={4} /> : <CropCell crop={r.crop_prev4} />}</td>)}
                     {vis('potential') && (<td>{r.potential ?? <span className="empty">—</span>}</td>)}
-                    {vis('tillage') && (<td>{r.tillage ?? <span className="empty">—</span>}</td>)}
+                    {vis('tillage') && (<td onClick={unl('tillage') ? stop : undefined}>{unl('tillage') ? <InlineTillage ie={ie} r={r} /> : (r.tillage ?? <span className="empty">—</span>)}</td>)}
                     {vis('variety') && (<td>{s0?.variety ? <>{s0.variety}{seeds.length > 1 && <> <span className="chip">+{seeds.length - 1}</span></>}</> : <span className="empty">—</span>}</td>)}
                     {vis('repro') && (<td>{s0?.reproduction ?? <span className="empty">—</span>}</td>)}
                     {vis('rate') && (<td className="num">{s0?.rate != null ? fmtRate(s0.rate, s0.rate_basis) : <span className="empty">—</span>}</td>)}
                     {vis('rate2') && (<td className="num" title={s0 && s0.rate_basis !== 'seeds_da' && s0.kg_da == null ? 'Няма партида с мин. данни (МХЗ и кълняемост)' : undefined}>{seedRate2(s0)?.text ?? <span className="empty">—</span>}</td>)}
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }} onClick={stop}>
+                      <button className="btn outline" style={{ minHeight: 28, padding: '0 7px' }} title="Редакция" aria-label={`Редакция ${r.field_name}`} onClick={() => setModal({ kind: 'edit', id: r.field_id, name: r.field_name })}>✎</button>
+                    </td>
                   </tr>
                   {open && (
                     <tr className="detail">
-                      <td colSpan={shownCols.length}>
+                      <td colSpan={shownCols.length + 1}>
                         <div className="detail-grid detail">
                           <div>
                             <h3>Данни за БЗС</h3>
@@ -373,7 +405,7 @@ export default function Rotation() {
               )
             })}
             {!loading && view.length === 0 && (
-              <tr><td colSpan={shownCols.length} className="empty">Няма полета по тези филтри.</td></tr>
+              <tr><td colSpan={shownCols.length + 1} className="empty">Няма полета по тези филтри.</td></tr>
             )}
           </tbody>
         </table>

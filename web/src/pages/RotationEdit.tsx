@@ -88,7 +88,7 @@ function tillageProblem(t1: string, t2: string): string | null {
 // ───────────────────────── редакция ─────────────────────────
 type PL = { planting_id: string; fcy_id: string; season_year_end: number; crop_id: string; planted_area_da: number; tillage_id: number | null; company_id: string | null; potential_id: number | null; field_name: string | null; isak_number: string | null; is_locked: boolean }
 
-export function FieldEditModal({ fieldId, fieldName, onClose, onDone }: { fieldId: string; fieldName: string; onClose: () => void; onDone: (m: string) => void }) {
+export function FieldEditModal({ fieldId, fieldName, onClose, onDone, onDelete }: { fieldId: string; fieldName: string; onClose: () => void; onDone: (m: string) => void; onDelete?: () => void }) {
   const { d, err } = useLookups()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -274,6 +274,11 @@ export function FieldEditModal({ fieldId, fieldName, onClose, onDone }: { fieldI
               <button className="btn" onClick={save} disabled={busy || !!problem}>{busy ? 'Записване…' : 'Запиши'}</button>
               <button className="btn outline" onClick={onClose} disabled={busy}>Отказ</button>
             </div>
+            {onDelete && (
+              <div style={{ borderTop: '1px solid var(--border, #ddd)', paddingTop: 12, marginTop: 4, textAlign: 'center' }}>
+                <button className="btn outline" style={{ color: '#a12b2b', borderColor: '#a12b2b', width: '100%' }} onClick={onDelete} disabled={busy}>Изтрий БЗС…</button>
+              </div>
+            )}
           </>
         )}
       </div>
