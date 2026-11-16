@@ -11,8 +11,8 @@ const NOMS: Nom[] = [
     { key: 'rate_basis', label: 'Норма по' }, { key: 'order_unit', label: 'Ед. поръчка' }, { key: 'seed_overage_pct', label: 'Запас, %', num: true }, { key: 'default_seeds_per_pack', label: 'Семена в торба', num: true } ] },
   { id: 'variety', label: 'Сортове / хибриди', table: 'variety', order: 'name', cols: [
     { key: 'name', label: 'Сорт / хибрид' }, { key: 'crop(name_bg)', label: 'Култура' }, { key: 'breeder', label: 'Селекционер' },
-    { key: 'technology', label: 'Технология' }, { key: 'seeds_per_pack', label: 'Семена в торба', num: true }, { key: 'is_active', label: 'Активен', bool: true } ],
-    select: '*, crop(name_bg)' },
+    { key: 'technology', label: 'Технология' }, { key: 'seeds_eff', label: 'Семена в торба', num: true }, { key: 'is_active', label: 'Активен', bool: true } ],
+    select: '*, crop(name_bg, default_seeds_per_pack)' },
   { id: 'reproduction', label: 'Размножения', table: 'reproduction', order: 'sort_order', cols: [
     { key: 'name', label: 'Размножение' }, { key: 'sort_order', label: 'Ред', num: true } ] },
   { id: 'tillage', label: 'Видове обработка', table: 'tillage_type', order: 'name_bg', cols: [
@@ -37,13 +37,29 @@ const NOMS: Nom[] = [
   { id: 'fert_product', label: 'Торове (продукти)', table: 'fertilizer_product', order: 'name', cols: [
     { key: 'code', label: 'Код' }, { key: 'name', label: 'Наименование' }, { key: 'category', label: 'Категория' }, { key: 'form', label: 'Форма' },
     { key: 'n_pct', label: 'N %', num: true }, { key: 'p2o5_pct', label: 'P₂O₅ %', num: true }, { key: 'k2o_pct', label: 'K₂O %', num: true },
-    { key: 'manufacturer', label: 'Производител' }, { key: 'is_active', label: 'Активен', bool: true } ] },
+    { key: 's_pct', label: 'S %', num: true }, { key: 'application', label: 'Приложение' },
+    { key: 'manufacturer', label: 'Производител' }, { key: 'data_status', label: 'Данни' }, { key: 'is_active', label: 'Активен', bool: true } ] },
+  { id: 'prz_product', label: 'ПРЗ продукти (БАБХ)', table: 'prz_product', order: 'trade_name', cols: [
+    { key: 'trade_name', label: 'Продукт' }, { key: 'function_groups', label: 'Функция' }, { key: 'active_substances', label: 'Активно вещество' },
+    { key: 'holder', label: 'Притежател' }, { key: 'permit_text', label: 'Разрешение' }, { key: 'source', label: 'Източник' },
+    { key: 'register_status', label: 'Статус' } ] },
+  { id: 'prz_use', label: 'ПРЗ употреби (по култура)', table: 'prz_use', order: 'prz_use_id', cols: [
+    { key: 'prz_product(trade_name)', label: 'Продукт' }, { key: 'crop(name_bg)', label: 'Култура' }, { key: 'dose_text', label: 'Доза (по регистър)' },
+    { key: 'dose_min', label: 'Доза от', num: true }, { key: 'dose_max', label: 'Доза до', num: true }, { key: 'dose_unit', label: 'Ед.' },
+    { key: 'phi_days', label: 'Карантина, дни', num: true }, { key: 'max_applications', label: 'Макс. третирания', num: true },
+    { key: 'interval_days', label: 'Интервал, дни', num: true }, { key: 'bbch_from', label: 'BBCH от', num: true }, { key: 'bbch_to', label: 'BBCH до', num: true } ],
+    select: '*, prz_product(trade_name), crop(name_bg)' },
   { id: 'div_rule', label: 'Правила за диверсификация', table: 'diversification_rule', order: 'rule_set', cols: [
     { key: 'rule_set', label: 'Набор' }, { key: 'check_type', label: 'Проверка' }, { key: 'n', label: 'N', num: true },
     { key: 'threshold_pct', label: 'Праг, %', num: true }, { key: 'message_bg', label: 'Съобщение' } ] },
 ]
 
 function getVal(row: Record<string, unknown>, key: string): unknown {
+  if (key === 'seeds_eff') {
+    const own = row.seeds_per_pack as number | null
+    const crop = row.crop as { default_seeds_per_pack?: number | null } | null
+    return own ?? crop?.default_seeds_per_pack ?? null
+  }
   const m = key.match(/^(\w+)\((\w+)\)$/)
   if (m) {
     const rel = row[m[1]] as Record<string, unknown> | null
@@ -57,11 +73,19 @@ export default function Nomenclatures() {
   const [rows, setRows] = useState<Record<string, unknown>[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [q, setQ] = useState('')
+
+  const needle = q.trim().toLowerCase()
+  const shown = needle
+    ? rows.filter((r) => sel.cols.some((c) => String(getVal(r, c.key) ?? '').toLowerCase().includes(needle)))
+    : rows
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError(null)
+    setQ('')
+    setRows([])
     ;(async () => {
       const all: Record<string, unknown>[] = []
       for (let from = 0; ; from += 1000) {
@@ -103,8 +127,12 @@ export default function Nomenclatures() {
         <div className="nom-view">
           <div className="page-head">
             <h2>{sel.label}</h2>
-            <span className="muted">{loading ? 'Зареждане…' : `${rows.length} записа`}</span>
+            <span className="muted">{loading ? 'Зареждане…' : needle ? `${shown.length} от ${rows.length} записа` : `${rows.length} записа`}</span>
           </div>
+          <label className="field" style={{ flex: 'none', maxWidth: 360 }}>
+            Търсене
+            <input className="input" type="search" value={q} onChange={(e) => setQ(e.target.value)} />
+          </label>
           {error && <div className="banner err" role="alert">Грешка: {error}</div>}
           <div className="card">
             <table className="grid narrow">
@@ -112,19 +140,19 @@ export default function Nomenclatures() {
                 <tr>{sel.cols.map((c) => <th key={c.key} className={c.num ? 'num' : ''}>{c.label}</th>)}</tr>
               </thead>
               <tbody>
-                {rows.map((r, i) => (
+                {shown.map((r, i) => (
                   <tr key={i}>
                     {sel.cols.map((c) => {
                       const v = getVal(r, c.key)
                       return (
                         <td key={c.key} className={c.num ? 'num' : ''}>
-                          {c.bool ? (v ? <span className="chip ok">Да</span> : <span className="chip">Не</span>) : v == null || v === '' ? <span className="empty">—</span> : String(v)}
+                          {c.bool ? (v ? <span className="chip ok">Да</span> : <span className="chip">Не</span>) : v == null || v === '' ? <span className="empty">—</span> : c.key === 'seeds_eff' && r.seeds_per_pack == null ? <>{String(v)} <span className="muted" title="Стойност по подразбиране за културата">(по подр.)</span></> : String(v)}
                         </td>
                       )
                     })}
                   </tr>
                 ))}
-                {!loading && rows.length === 0 && !error && (
+                {!loading && shown.length === 0 && !error && (
                   <tr><td colSpan={sel.cols.length} className="empty">Няма записи.</td></tr>
                 )}
               </tbody>

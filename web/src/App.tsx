@@ -4,8 +4,9 @@ import { supabase, configured } from './lib/supabase'
 import Login from './Login'
 import Rotation from './pages/Rotation'
 import Nomenclatures from './pages/Nomenclatures'
-import Placeholder from './pages/Placeholder'
 import SeedPlanning from './pages/SeedPlanning'
+import PrzPlanning from './pages/PrzPlanning'
+import FertPlanning from './pages/FertPlanning'
 
 type PageKey = 'rotation' | 'seeds' | 'fert' | 'prz' | 'nomenclatures'
 
@@ -88,8 +89,8 @@ export default function App() {
       <main className="content">
         {page === 'rotation' && <Rotation />}
         {page === 'seeds' && <SeedPlanning />}
-        {page === 'fert' && <Placeholder title="Планиране торове" />}
-        {page === 'prz' && <Placeholder title="Продукти за растителна защита" />}
+        {page === 'fert' && <FertPlanning />}
+        {page === 'prz' && <PrzPlanning />}
         {page === 'nomenclatures' && <Nomenclatures />}
       </main>
     </div>
