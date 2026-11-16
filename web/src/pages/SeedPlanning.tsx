@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { fmtArea, fmtInt, cropColor, cropLabel } from '../lib/format'
 import { ColumnPicker, useHiddenCols } from '../lib/columns'
+import { MultiFilter, anyToken } from '../lib/multifilter'
 
 type Planting = {
   planting_id: string
@@ -171,9 +172,9 @@ export default function SeedPlanning() {
   const view = useMemo(() => {
     const n = q.trim().toLowerCase()
     return plantings.filter((p) => {
-      if (cropF && p.crop_name !== cropF) return false
-      if (companyF && p.company_name !== companyF) return false
-      if (baseF && p.farm_base_name !== baseF) return false
+      if (!anyToken(cropF, (t) => p.crop_name === t)) return false
+      if (!anyToken(companyF, (t) => p.company_name === t)) return false
+      if (!anyToken(baseF, (t) => p.farm_base_name === t)) return false
       if (onlyEmpty && (seedsByPlanting.get(p.planting_id)?.length ?? 0) > 0) return false
       if (n && !p.field_name.toLowerCase().includes(n)) return false
       return true
@@ -298,19 +299,13 @@ export default function SeedPlanning() {
           <input className="input" type="search" value={q} onChange={(e) => setQ(e.target.value)} />
         </label>
         <label className="field">Култура
-          <select className="input" value={cropF} onChange={(e) => setCropF(e.target.value)}>
-            <option value="">Всички</option>{opts.crops.map((c) => <option key={c} value={c}>{cropLabel(c)}</option>)}
-          </select>
+          <MultiFilter value={cropF} onChange={setCropF} ariaLabel="Култура" options={opts.crops.map((c) => ({ value: c, label: cropLabel(c) }))} />
         </label>
         <label className="field">Фирма
-          <select className="input" value={companyF} onChange={(e) => setCompanyF(e.target.value)}>
-            <option value="">Всички</option>{opts.companies.map((c) => <option key={c}>{c}</option>)}
-          </select>
+          <MultiFilter value={companyF} onChange={setCompanyF} ariaLabel="Фирма" options={opts.companies.map((c) => ({ value: c, label: c }))} />
         </label>
         <label className="field">Стопанска база
-          <select className="input" value={baseF} onChange={(e) => setBaseF(e.target.value)}>
-            <option value="">Всички</option>{opts.bases.map((c) => <option key={c}>{c}</option>)}
-          </select>
+          <MultiFilter value={baseF} onChange={setBaseF} ariaLabel="Стопанска база" options={opts.bases.map((c) => ({ value: c, label: c }))} />
         </label>
         <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 44 }}>
           <input type="checkbox" checked={onlyEmpty} onChange={(e) => setOnlyEmpty(e.target.checked)} /> Само без сорт

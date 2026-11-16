@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { fmtArea, fmtInt, cropColor, cropLabel } from '../lib/format'
 import { ColumnPicker, useHiddenCols } from '../lib/columns'
+import { MultiFilter, anyToken } from '../lib/multifilter'
 
 // ───────────────────────── типове ─────────────────────────
 type Planting = {
@@ -189,7 +190,7 @@ export default function FertPlanning() {
     const n = q.trim().toLowerCase()
     const list = plantings.filter((p) => {
       if (n && !p.field_name.toLowerCase().includes(n)) return false
-      const eq = (k: string, v: string | null) => { const f = fSel[k]; if (!f) return true; if (f === EMPTY) return !v; return v === f }
+      const eq = (k: string, v: string | null) => anyToken(fSel[k], (t) => (t === EMPTY ? !v : v === t))
       if (!eq('company', p.company_name) || !eq('base', p.farm_base_name) || !eq('crop', p.crop_name) || !eq('potential', p.potential_name)) return false
       const a = p.planted_area_da ?? 0
       if (fArea.min && a < Number(fArea.min.replace(',', '.'))) return false
@@ -197,9 +198,7 @@ export default function FertPlanning() {
       for (const s of stages) {
         const f = fSel['s' + s.stage_id]; if (!f) continue
         const items = (linesByPlanting.get(p.planting_id) ?? []).filter((x) => x.stage_id === s.stage_id)
-        if (f === EMPTY) { if (items.length > 0) return false }
-        else if (f === ANY) { if (items.length === 0) return false }
-        else if (!items.some((x) => x.product_id === f)) return false
+        if (!anyToken(f, (t) => (t === EMPTY ? items.length === 0 : t === ANY ? items.length > 0 : items.some((x) => x.product_id === t)))) return false
       }
       return true
     })
@@ -440,10 +439,8 @@ export default function FertPlanning() {
               <th><input className="input fi" placeholder="Филтър" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Филтър Наименование" /></th>
               {(['company', 'base', 'crop'] as const).filter((k) => vis(k)).map((k) => (
                 <th key={k}>
-                  <select className="input fi" value={fSel[k] ?? ''} onChange={(e) => setF(k, e.target.value)} aria-label={`Филтър ${k}`}>
-                    <option value="">Всички</option><option value={EMPTY}>— празно —</option>
-                    {opts[k].map((v) => <option key={v} value={v}>{k === 'crop' ? cropLabel(v) : v}</option>)}
-                  </select>
+                  <MultiFilter value={fSel[k] ?? ''} onChange={(v) => setF(k, v)} ariaLabel={`Филтър ${k}`} specials={[{ value: EMPTY, label: '— празно —' }]}
+                    options={opts[k].map((v) => ({ value: v, label: k === 'crop' ? cropLabel(v) : v }))} />
                 </th>
               ))}
               {vis('area') && <th className="num">
@@ -453,17 +450,14 @@ export default function FertPlanning() {
                 </span>
               </th>}
               {vis('potential') && <th>
-                <select className="input fi" value={fSel.potential ?? ''} onChange={(e) => setF('potential', e.target.value)} aria-label="Филтър потенциал">
-                  <option value="">Всички</option><option value={EMPTY}>— празно —</option>
-                  {opts.potential.map((v) => <option key={v} value={v}>{v}</option>)}
-                </select>
+                <MultiFilter value={fSel.potential ?? ''} onChange={(v) => setF('potential', v)} ariaLabel="Филтър потенциал" specials={[{ value: EMPTY, label: '— празно —' }]}
+                  options={opts.potential.map((v) => ({ value: v, label: v }))} />
               </th>}
               {stages.filter((s) => vis('s' + s.stage_id)).map((s) => (
                 <th key={s.stage_id}>
-                  <select className="input fi" value={fSel['s' + s.stage_id] ?? ''} onChange={(e) => setF('s' + s.stage_id, e.target.value)} aria-label={`Филтър ${s.name_bg}`}>
-                    <option value="">Всички</option><option value={EMPTY}>— няма —</option><option value={ANY}>— има —</option>
-                    {(opts.byStage[s.stage_id] ?? []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                  </select>
+                  <MultiFilter wide value={fSel['s' + s.stage_id] ?? ''} onChange={(v) => setF('s' + s.stage_id, v)} ariaLabel={`Филтър ${s.name_bg}`}
+                    specials={[{ value: EMPTY, label: '— няма —' }, { value: ANY, label: '— има —' }]}
+                    options={(opts.byStage[s.stage_id] ?? []).map((o) => ({ value: o.id, label: o.name }))} />
                 </th>
               ))}
               {vis('n') && <th />}{vis('p') && <th />}{vis('k') && <th />}

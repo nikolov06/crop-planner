@@ -99,7 +99,6 @@ export function FieldEditModal({ fieldId, fieldName, onClose, onDone, onDelete }
   const [seeds, setSeeds] = useState<Record<string, number>>({}) // planting_id -> брой сортове
   const [fcyCur, setFcyCur] = useState<string | null>(null)
   const [f, setF] = useState({ name: '', isak: '', company: '', potential: '', crop: '', area: '', t1: '', t2: '' })
-  const [prev, setPrev] = useState<Record<number, string>>({}) // година -> crop_id
 
   useEffect(() => {
     if (!d) return
@@ -111,7 +110,7 @@ export function FieldEditModal({ fieldId, fieldName, onClose, onDone, onDelete }
         if (fl.error) throw new Error(fl.error.message)
         const ctx = await supabase.from('v_planting_context')
           .select('planting_id,fcy_id,season_year_end,crop_id,planted_area_da,tillage_id,company_id,potential_id,field_name,isak_number,is_locked')
-          .eq('field_id', fieldId).eq('role', 'main').gte('season_year_end', ye - 4).lte('season_year_end', ye)
+          .eq('field_id', fieldId).eq('role', 'main').eq('season_year_end', ye)
         if (ctx.error) throw new Error(ctx.error.message)
         const map: Record<number, PL> = {}
         for (const r of (ctx.data ?? []) as PL[]) map[r.season_year_end] = r
@@ -143,9 +142,6 @@ export function FieldEditModal({ fieldId, fieldName, onClose, onDone, onDelete }
           crop: cp?.crop_id ?? '', area: cp ? String(cp.planted_area_da) : '',
           t1: cp?.tillage_id != null ? String(cp.tillage_id) : '', t2: cp && t2m[cp.planting_id] != null ? String(t2m[cp.planting_id]) : '',
         })
-        const pv: Record<number, string> = {}
-        for (let k = 1; k <= 4; k++) if (map[ye - k]) pv[ye - k] = map[ye - k].crop_id
-        setPrev(pv)
       } catch (e) { if (!off) setError((e as Error).message) }
       if (!off) setLoading(false)
     })()
@@ -218,16 +214,6 @@ export function FieldEditModal({ fieldId, fieldName, onClose, onDone, onDelete }
         if (r.error) throw new Error(msg(r.error))
         steps.push('нова култура за сезона')
       }
-      // 3. предходни сезони – само смяна на култура на съществуващи записи
-      for (let k = 1; k <= 4; k++) {
-        const p = pls[ye - k]; const nv = prev[ye - k]
-        if (!p || !nv || nv === p.crop_id) continue
-        if ((seeds[p.planting_id] ?? 0) > 0) await removeSeeds(p.planting_id)
-        const r = await supabase.from('field_planting').update({ crop_id: nv }).eq('planting_id', p.planting_id).select('planting_id')
-        if (r.error) throw new Error(msg(r.error))
-        if (!r.data?.length) throw new Error(`Културата за ${ye - k - 1}/${ye - k} не е записана – вероятно нямате права или периодът е заключен.`)
-        steps.push(`култура ${ye - k - 1}/${ye - k}`)
-      }
       onDone(steps.length ? `БЗС „${f.name.trim()}“: записано (${steps.join(', ')}).` : 'Няма промени за записване.')
     } catch (e) {
       setError(`${(e as Error).message}${steps.length ? ` (вече записано: ${steps.join(', ')})` : ''}`)
@@ -255,16 +241,6 @@ export function FieldEditModal({ fieldId, fieldName, onClose, onDone, onDelete }
               <Sel label="Почвообработка" value={f.t1} onChange={(v) => setF({ ...f, t1: v, t2: v ? f.t2 : '' })} opts={d.tillages} />
               {d.t2Ok && <Sel label="Втора обработка (по избор)" value={f.t2} onChange={(v) => setF({ ...f, t2: v })} opts={d.tillages} disabled={!f.t1} />}
             </div>
-            {Object.keys(prev).length > 0 && (
-              <>
-                <strong>Предходни култури</strong>
-                <div className="filters" style={{ alignItems: 'flex-start' }}>
-                  {[1, 2, 3, 4].filter((k) => pls[ye - k]).map((k) => (
-                    <Sel key={k} label={`${ye - k - 1}/${ye - k}`} value={prev[ye - k] ?? ''} onChange={(v) => setPrev({ ...prev, [ye - k]: v })} opts={d.crops} />
-                  ))}
-                </div>
-              </>
-            )}
             {!cur && <div className="banner">За този сезон полето още няма култура. Ако зададеш култура и площ, ще се създаде запис.</div>}
             {cur?.is_locked && <div className="banner err">Периодът е заключен – записът ще бъде отказан.</div>}
             {seedsAffected > 0 && <div className="banner err">Смяна на културата ще премахне {seedsAffected} ред(а) със сортове за този сезон (сортът е на старата култура). Ще трябва да ги зададеш наново в „Планиране семена“.</div>}
@@ -433,6 +409,128 @@ export function FieldDeleteModal({ fieldId, fieldName, onClose, onDone }: { fiel
           <button className="btn" style={{ background: '#a12b2b', borderColor: '#a12b2b' }} onClick={del} disabled={!ok || busy || !counts}>{busy ? 'Изтриване…' : 'Изтрий'}</button>
           <button className="btn outline" onClick={onClose} disabled={busy}>Отказ</button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ───────────────────────── групова промяна (текущ сезон) ─────────────────────────
+const CLEAR = '__clear'
+const chunk = <T,>(a: T[], n: number): T[][] => { const o: T[][] = []; for (let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o }
+
+export function BulkModal({ fieldIds, onClose, onDone }: { fieldIds: string[]; onClose: () => void; onDone: (m: string) => void }) {
+  const { d, err } = useLookups()
+  const [pls, setPls] = useState<{ planting_id: string; field_id: string; crop_id: string; tillage_id: number | null; t2: number | null; seeds: number }[] | null>(null)
+  const [crop, setCrop] = useState('')
+  const [t1, setT1] = useState('')
+  const [t2, setT2] = useState('')
+  const [ok, setOk] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!d) return
+    let off = false
+    ;(async () => {
+      try {
+        const ye = d.season.year_end
+        const out: { planting_id: string; field_id: string; crop_id: string; tillage_id: number | null; t2: number | null; seeds: number }[] = []
+        for (const ids of chunk(fieldIds, 80)) {
+          const r = await supabase.from('v_planting_context').select('planting_id,field_id,crop_id,tillage_id').eq('role', 'main').eq('season_year_end', ye).in('field_id', ids)
+          if (r.error) throw new Error(r.error.message)
+          for (const x of (r.data ?? []) as { planting_id: string; field_id: string; crop_id: string; tillage_id: number | null }[]) out.push({ ...x, t2: null, seeds: 0 })
+        }
+        const byPl = new Map(out.map((p) => [p.planting_id, p]))
+        for (const ids of chunk(out.map((p) => p.planting_id), 80)) {
+          if (d.t2Ok) {
+            const r = await supabase.from('field_planting').select('planting_id,tillage2_id').in('planting_id', ids)
+            for (const x of (r.data ?? []) as { planting_id: string; tillage2_id: number | null }[]) { const p = byPl.get(x.planting_id); if (p) p.t2 = x.tillage2_id }
+          }
+          const s = await supabase.from('planting_seed').select('planting_id').in('planting_id', ids)
+          for (const x of (s.data ?? []) as { planting_id: string }[]) { const p = byPl.get(x.planting_id); if (p) p.seeds++ }
+        }
+        if (!off) setPls(out)
+      } catch (e) { if (!off) setError((e as Error).message) }
+    })()
+    return () => { off = true }
+  }, [d, fieldIds])
+
+  const skipped = pls ? fieldIds.length - pls.length : 0
+  const cropChanging = pls && crop ? pls.filter((p) => p.crop_id !== crop) : []
+  const seedsLost = cropChanging.reduce((a, p) => a + (p.seeds > 0 ? 1 : 0), 0)
+  // резултатни стойности на обработките и проверка на правилата
+  const fin = (p: NonNullable<typeof pls>[number]) => {
+    const a = t1 === '' ? p.tillage_id : t1 === CLEAR ? null : Number(t1)
+    let b = t2 === '' ? p.t2 : t2 === CLEAR ? null : Number(t2)
+    if (a == null) b = (t2 !== '' && t2 !== CLEAR) ? b : null
+    return { a, b }
+  }
+  const bad = pls ? pls.filter((p) => { const { a, b } = fin(p); return b != null && (a == null || a === b) }).length : 0
+  const nothing = !crop && !t1 && !t2
+
+  async function apply() {
+    if (!pls || !d) return
+    setBusy(true); setError(null)
+    const ids = pls.map((p) => p.planting_id)
+    const patch: Record<string, unknown> = {}
+    if (crop) patch.crop_id = crop
+    if (t1) patch.tillage_id = t1 === CLEAR ? null : Number(t1)
+    if (d.t2Ok) {
+      if (t2) patch.tillage2_id = t2 === CLEAR ? null : Number(t2)
+      else if (t1 === CLEAR) patch.tillage2_id = null
+    }
+    let done = 0
+    try {
+      if (crop) {
+        const withSeeds = cropChanging.filter((p) => p.seeds > 0).map((p) => p.planting_id)
+        for (const c of chunk(withSeeds, 80)) {
+          const r = await supabase.from('planting_seed').delete().in('planting_id', c)
+          if (r.error) throw new Error(r.error.message)
+        }
+      }
+      for (const c of chunk(ids, 80)) {
+        const r = await supabase.from('field_planting').update(patch).in('planting_id', c).select('planting_id')
+        if (r.error) throw new Error(r.error.message)
+        done += r.data?.length ?? 0
+      }
+      if (done < ids.length) throw new Error(`Записани са само ${done} от ${ids.length} – вероятно липсват права или периодът е заключен за част от БЗС.`)
+      onDone(`Променени ${done} БЗС (${[crop ? 'култура' : '', t1 || t2 ? 'почвообработка' : ''].filter(Boolean).join(' и ')}).`)
+    } catch (e) {
+      setError(`${(e as Error).message}${done ? ` (вече записани: ${done})` : ''}`)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Групова промяна">
+      <div className="modal" style={{ maxWidth: 640 }}>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <h2 style={{ flex: 1 }}>Промяна за {fieldIds.length} БЗС{d ? ` · ${d.season.label}` : ''}</h2>
+          <button className="btn outline" onClick={onClose} disabled={busy}>Затвори</button>
+        </div>
+        {(err || error) && <div className="banner err" role="alert">{err ?? error}</div>}
+        {!d || !pls ? (!err && !error && <span className="muted">Зареждане…</span>) : (
+          <>
+            <span className="muted">Променя само основната култура на текущия сезон. Полетата, оставени на „без промяна“, не се пипат.</span>
+            <div className="filters" style={{ alignItems: 'flex-start' }}>
+              <Sel label="Култура" value={crop} onChange={setCrop} opts={d.crops} empty="— без промяна —" />
+              <Sel label="Почвообработка" value={t1} onChange={setT1} opts={[{ id: CLEAR, label: '— изчисти —' }, ...d.tillages]} empty="— без промяна —" />
+              {d.t2Ok && <Sel label="Втора обработка" value={t2} onChange={setT2} opts={[{ id: CLEAR, label: '— изчисти —' }, ...d.tillages]} empty="— без промяна —" />}
+            </div>
+            {skipped > 0 && <div className="banner">{skipped} от избраните БЗС нямат основна култура за този сезон и ще бъдат пропуснати.</div>}
+            {bad > 0 && <div className="banner err" role="alert">За {bad} БЗС резултатът е невалиден: втората обработка изисква първа и не може да е равна на нея.</div>}
+            {seedsLost > 0 && (
+              <>
+                <div className="banner err">Смяната на културата ще изтрие редовете със сортове при {seedsLost} БЗС (за тях се задават наново в „Планиране семена“).</div>
+                <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}><input type="checkbox" checked={ok} onChange={(e) => setOk(e.target.checked)} /> Разбирам и съм съгласен</label>
+              </>
+            )}
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button className="btn" onClick={apply} disabled={busy || nothing || bad > 0 || pls.length === 0 || (seedsLost > 0 && !ok)}>{busy ? 'Записване…' : `Приложи за ${pls.length} БЗС`}</button>
+              <button className="btn outline" onClick={onClose} disabled={busy}>Отказ</button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )

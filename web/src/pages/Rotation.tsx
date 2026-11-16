@@ -2,7 +2,8 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { fmtArea, fmtInt, fmtRate, cropColor, cropLabel } from '../lib/format'
 import { ColumnPicker, useHiddenCols } from '../lib/columns'
-import { FieldAddModal, FieldDeleteModal, FieldEditModal } from './RotationEdit'
+import { MultiFilter, anyToken } from '../lib/multifilter'
+import { BulkModal, FieldAddModal, FieldDeleteModal, FieldEditModal } from './RotationEdit'
 import { INLINE_COLS, InlineArea, InlineCrop, InlineName, InlineTillage, useInlineEdit, type InlineKey, type RowPatch } from './RotationInline'
 
 type SeedRow = { variety: string | null; reproduction: string | null; area_da: number | null; rate: number | null; rate_basis: string | null; origin: string | null; kg_da?: number | null }
@@ -104,13 +105,15 @@ export default function Rotation() {
   const [modal, setModal] = useState<null | { kind: 'add' } | { kind: 'edit' | 'del'; id: string; name: string }>(null)
   const [flash, setFlash] = useState<string | null>(null)
   const [flashErr, setFlashErr] = useState(false)
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [bulkOpen, setBulkOpen] = useState(false)
   const [unlocked, setUnlocked] = useState<Set<InlineKey>>(new Set())
   const [lockOpen, setLockOpen] = useState(false)
   const patchRow = (id: string, p: RowPatch) => setRows((rs) => rs.map((x) => (x.field_id === id ? { ...x, ...p } as Row : x)))
   const ie = useInlineEdit(unlocked.size > 0, patchRow, (m, isErr) => { setFlash(m); setFlashErr(isErr) })
   const unl = (k: InlineKey) => unlocked.has(k) && ie.ready
   const stop = (e: { stopPropagation: () => void }) => e.stopPropagation()
-  const done = (m: string) => { setModal(null); setFlashErr(false); setFlash(m); setLoading(true); setReloadKey((k) => k + 1) }
+  const done = (m: string) => { setModal(null); setBulkOpen(false); setPicked(new Set()); setFlashErr(false); setFlash(m); setLoading(true); setReloadKey((k) => k + 1) }
 
   useEffect(() => {
     let cancelled = false
@@ -214,11 +217,11 @@ export default function Rotation() {
         if (c.kind === 'text') { if (!textVal(r, c.key).toLowerCase().includes(f.toLowerCase())) return false; continue }
         if (c.key === 'variety' || c.key === 'repro') {
           const vs = seedVals(r, c.key)
-          if (f === EMPTY ? vs.length > 0 : !vs.includes(f)) return false
+          if (!anyToken(f, (t) => (t === EMPTY ? vs.length === 0 : vs.includes(t)))) return false
           continue
         }
         const v = textVal(r, c.key)
-        if (f === EMPTY ? v !== '' : v !== f) return false
+        if (!anyToken(f, (t) => (t === EMPTY ? v === '' : v === t))) return false
       }
       return true
     })
@@ -289,6 +292,14 @@ export default function Rotation() {
       {unlocked.size > 0 && !ie.ready && !ie.loadErr && <div className="banner">Зареждане на данните за редакция…</div>}
       {ie.loadErr && <div className="banner err" role="alert">Редакцията не е достъпна: {ie.loadErr}</div>}
       {flash && <div className={flashErr ? 'banner err' : 'banner'} role={flashErr ? 'alert' : 'status'} onClick={() => setFlash(null)}>{flash}</div>}
+      {picked.size > 0 && (
+        <div className="banner" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <strong>Избрани: {picked.size} БЗС · {fmtArea(rows.filter((x) => picked.has(x.field_id)).reduce((a, x) => a + (x.area_da ?? 0), 0))} дка</strong>
+          <button className="btn" onClick={() => setBulkOpen(true)}>Промени култура / почвообработка…</button>
+          <button className="btn outline" onClick={() => setPicked(new Set())}>Изчисти избора</button>
+        </div>
+      )}
+      {bulkOpen && <BulkModal fieldIds={Array.from(picked)} onClose={() => setBulkOpen(false)} onDone={done} />}
       {modal?.kind === 'add' && <FieldAddModal onClose={() => setModal(null)} onDone={done} />}
       {modal?.kind === 'edit' && <FieldEditModal fieldId={modal.id} fieldName={modal.name} onClose={() => setModal(null)} onDone={done} onDelete={() => setModal({ kind: 'del', id: modal.id, name: modal.name })} />}
       {modal?.kind === 'del' && <FieldDeleteModal fieldId={modal.id} fieldName={modal.name} onClose={() => setModal(null)} onDone={done} />}
@@ -297,6 +308,8 @@ export default function Rotation() {
         <table className="grid">
           <thead>
             <tr>
+              <th style={{ width: 34 }}><input type="checkbox" aria-label="Избери всички показани" checked={view.length > 0 && view.every((x) => picked.has(x.field_id))}
+                onChange={() => setPicked((p) => { const n = new Set(p); if (view.length > 0 && view.every((x) => n.has(x.field_id))) view.forEach((x) => n.delete(x.field_id)); else view.forEach((x) => n.add(x.field_id)); return n })} /></th>
               {shownCols.map((c) => (
                 <th key={c.key} className={c.num ? 'num' : ''}>
                   <button onClick={() => toggleSort(c.key)}>{label[c.key]} {arrow(c.key)}</button>
@@ -309,17 +322,16 @@ export default function Rotation() {
               <th aria-label="Действия" style={{ width: 44 }} />
             </tr>
             <tr className="filter-row">
+              <th />
               {shownCols.map((c) => (
                 <th key={c.key} className={c.num ? 'num' : ''}>
                   {c.kind === 'text' && (
                     <input className="input fi" placeholder="Филтър" value={sel[c.key] ?? ''} onChange={(e) => setSel({ ...sel, [c.key]: e.target.value })} aria-label={`Филтър ${label[c.key]}`} />
                   )}
                   {c.kind === 'select' && (
-                    <select className="input fi" value={sel[c.key] ?? ''} onChange={(e) => setSel({ ...sel, [c.key]: e.target.value })} aria-label={`Филтър ${label[c.key]}`}>
-                      <option value="">Всички</option>
-                      <option value={EMPTY}>— празно —</option>
-                      {(options[c.key] ?? []).map((v) => <option key={v} value={v}>{cropKeys.includes(c.key) ? cropLabel(v) : v}</option>)}
-                    </select>
+                    <MultiFilter value={sel[c.key] ?? ''} onChange={(v) => setSel({ ...sel, [c.key]: v })} ariaLabel={`Филтър ${label[c.key]}`}
+                      specials={[{ value: EMPTY, label: '— празно —' }]}
+                      options={(options[c.key] ?? []).map((v) => ({ value: v, label: cropKeys.includes(c.key) ? cropLabel(v) : v }))} />
                   )}
                   {c.kind === 'num' && (
                     <span className="range">
@@ -340,6 +352,8 @@ export default function Rotation() {
               return (
                 <Fragment key={r.field_id}>
                   <tr className={`row ${open ? 'open' : ''}`} onClick={() => setOpenId(open ? null : r.field_id)}>
+                    <td onClick={stop}><input type="checkbox" aria-label={`Избери ${r.field_name}`} checked={picked.has(r.field_id)}
+                      onChange={() => setPicked((p) => { const n = new Set(p); if (n.has(r.field_id)) n.delete(r.field_id); else n.add(r.field_id); return n })} /></td>
                     <td>
                       <span className="name">
                         <svg className="chev" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
@@ -350,10 +364,10 @@ export default function Rotation() {
                     {vis('base') && (<td>{r.farm_base_name ?? <span className="empty">—</span>}</td>)}
                     {vis('area') && (<td className="num" onClick={unl('area') ? stop : undefined}>{unl('area') ? <InlineArea ie={ie} r={r} /> : fmtArea(r.area_da)}</td>)}
                     {vis('crop') && (<td onClick={unl('crop') ? stop : undefined}>{unl('crop') ? <InlineCrop ie={ie} r={r} off={0} /> : <><CropCell crop={r.crop} main />{(r.n_second_crops ?? 0) > 0 && <> <span className="chip">+{r.n_second_crops}</span></>}</>}</td>)}
-                    {vis('p1') && (<td onClick={unl('p1') ? stop : undefined}>{unl('p1') ? <InlineCrop ie={ie} r={r} off={1} /> : <CropCell crop={r.crop_prev1} />}</td>)}
-                    {vis('p2') && (<td onClick={unl('p2') ? stop : undefined}>{unl('p2') ? <InlineCrop ie={ie} r={r} off={2} /> : <CropCell crop={r.crop_prev2} />}</td>)}
-                    {vis('p3') && (<td onClick={unl('p3') ? stop : undefined}>{unl('p3') ? <InlineCrop ie={ie} r={r} off={3} /> : <CropCell crop={r.crop_prev3} />}</td>)}
-                    {vis('p4') && (<td onClick={unl('p4') ? stop : undefined}>{unl('p4') ? <InlineCrop ie={ie} r={r} off={4} /> : <CropCell crop={r.crop_prev4} />}</td>)}
+                    {vis('p1') && (<td><CropCell crop={r.crop_prev1} /></td>)}
+                    {vis('p2') && (<td><CropCell crop={r.crop_prev2} /></td>)}
+                    {vis('p3') && (<td><CropCell crop={r.crop_prev3} /></td>)}
+                    {vis('p4') && (<td><CropCell crop={r.crop_prev4} /></td>)}
                     {vis('potential') && (<td>{r.potential ?? <span className="empty">—</span>}</td>)}
                     {vis('tillage') && (<td onClick={unl('tillage') ? stop : undefined}>{unl('tillage') ? <InlineTillage ie={ie} r={r} /> : (r.tillage ?? <span className="empty">—</span>)}</td>)}
                     {vis('variety') && (<td>{s0?.variety ? <>{s0.variety}{seeds.length > 1 && <> <span className="chip">+{seeds.length - 1}</span></>}</> : <span className="empty">—</span>}</td>)}
@@ -366,7 +380,7 @@ export default function Rotation() {
                   </tr>
                   {open && (
                     <tr className="detail">
-                      <td colSpan={shownCols.length + 1}>
+                      <td colSpan={shownCols.length + 2}>
                         <div className="detail-grid detail">
                           <div>
                             <h3>Данни за БЗС</h3>
@@ -405,7 +419,7 @@ export default function Rotation() {
               )
             })}
             {!loading && view.length === 0 && (
-              <tr><td colSpan={shownCols.length + 1} className="empty">Няма полета по тези филтри.</td></tr>
+              <tr><td colSpan={shownCols.length + 2} className="empty">Няма полета по тези филтри.</td></tr>
             )}
           </tbody>
         </table>

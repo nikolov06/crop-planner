@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { fmtArea, fmtInt, cropColor, cropLabel } from '../lib/format'
 import { ColumnPicker, useHiddenCols } from '../lib/columns'
+import { MultiFilter, anyToken } from '../lib/multifilter'
 
 // ───────────────────────── типове ─────────────────────────
 type Stage = 't1' | 't2' | 'corrective' | 'total_herbicide_pre'
@@ -227,7 +228,7 @@ export default function PrzPlanning() {
     const n = q.trim().toLowerCase()
     const list = plantings.filter((p) => {
       if (n && !p.field_name.toLowerCase().includes(n)) return false
-      const eq = (k: string, v: string | null) => { const f = fSel[k]; if (!f) return true; if (f === EMPTY) return !v; return v === f }
+      const eq = (k: string, v: string | null) => anyToken(fSel[k], (t) => (t === EMPTY ? !v : v === t))
       if (!eq('company', p.company_name) || !eq('base', p.farm_base_name) || !eq('crop', p.crop_name) || !eq('potential', p.potential_name) || !eq('tillage', p.tillage_name)) return false
       const a = p.planted_area_da ?? 0
       if (fArea.min && a < Number(fArea.min.replace(',', '.'))) return false
@@ -235,9 +236,7 @@ export default function PrzPlanning() {
       for (const s of STAGES) {
         const f = fSel[s.key]; if (!f) continue
         const items = (assignsByPlanting.get(p.planting_id) ?? []).filter((x) => x.stage === s.key)
-        if (f === EMPTY) { if (items.length > 0) return false }
-        else if (f === ANY) { if (items.length === 0) return false }
-        else if (!items.some((x) => x.prz_product_id === f)) return false
+        if (!anyToken(f, (t) => (t === EMPTY ? items.length === 0 : t === ANY ? items.length > 0 : items.some((x) => x.prz_product_id === t)))) return false
       }
       return true
     })
@@ -505,10 +504,8 @@ export default function PrzPlanning() {
               <th><input className="input fi" placeholder="Филтър" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Филтър Наименование" /></th>
               {(['company', 'base', 'crop'] as const).filter((k) => vis(k)).map((k) => (
                 <th key={k}>
-                  <select className="input fi" value={fSel[k] ?? ''} onChange={(e) => setF(k, e.target.value)} aria-label={`Филтър ${k}`}>
-                    <option value="">Всички</option><option value={EMPTY}>— празно —</option>
-                    {opts[k].map((v) => <option key={v} value={v}>{k === 'crop' ? cropLabel(v) : v}</option>)}
-                  </select>
+                  <MultiFilter value={fSel[k] ?? ''} onChange={(v) => setF(k, v)} ariaLabel={`Филтър ${k}`} specials={[{ value: EMPTY, label: '— празно —' }]}
+                    options={opts[k].map((v) => ({ value: v, label: k === 'crop' ? cropLabel(v) : v }))} />
                 </th>
               ))}
               {vis('area') && <th className="num">
@@ -519,18 +516,15 @@ export default function PrzPlanning() {
               </th>}
               {(['potential', 'tillage'] as const).filter((k) => vis(k)).map((k) => (
                 <th key={k}>
-                  <select className="input fi" value={fSel[k] ?? ''} onChange={(e) => setF(k, e.target.value)} aria-label={`Филтър ${k}`}>
-                    <option value="">Всички</option><option value={EMPTY}>— празно —</option>
-                    {opts[k].map((v) => <option key={v} value={v}>{v}</option>)}
-                  </select>
+                  <MultiFilter value={fSel[k] ?? ''} onChange={(v) => setF(k, v)} ariaLabel={`Филтър ${k}`} specials={[{ value: EMPTY, label: '— празно —' }]}
+                    options={opts[k].map((v) => ({ value: v, label: v }))} />
                 </th>
               ))}
               {STAGES.filter((s) => vis(s.key)).map((s) => (
                 <th key={s.key}>
-                  <select className="input fi" value={fSel[s.key] ?? ''} onChange={(e) => setF(s.key, e.target.value)} aria-label={`Филтър ${s.short}`}>
-                    <option value="">Всички</option><option value={EMPTY}>— няма —</option><option value={ANY}>— има —</option>
-                    {opts[s.key].map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                  </select>
+                  <MultiFilter wide value={fSel[s.key] ?? ''} onChange={(v) => setF(s.key, v)} ariaLabel={`Филтър ${s.short}`}
+                    specials={[{ value: EMPTY, label: '— няма —' }, { value: ANY, label: '— има —' }]}
+                    options={opts[s.key].map((o) => ({ value: o.id, label: o.name }))} />
                 </th>
               ))}
             </tr>
