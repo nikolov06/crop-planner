@@ -1,11 +1,13 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { fmtArea, fmtRate, cropColor, cropLabel } from '../lib/format'
+import { fmtArea, fmtInt, fmtRate, cropColor, cropLabel } from '../lib/format'
+import { ColumnPicker, useHiddenCols } from '../lib/columns'
 
-type SeedRow = { variety: string | null; reproduction: string | null; area_da: number | null; rate: number | null; rate_basis: string | null; origin: string | null }
+type SeedRow = { variety: string | null; reproduction: string | null; area_da: number | null; rate: number | null; rate_basis: string | null; origin: string | null; kg_da?: number | null }
 type AliasRow = { name: string; isak_number: string | null; area_da: number | null }
 type Row = {
   field_id: string
+  planting_id?: string | null
   code: string | null
   field_name: string
   isak_number: string | null
@@ -31,8 +33,8 @@ type Row = {
   aliases: AliasRow[] | null
 }
 
-type ColKey = 'field_name' | 'company' | 'base' | 'area' | 'crop' | 'p1' | 'p2' | 'p3' | 'p4' | 'potential' | 'tillage' | 'variety' | 'repro' | 'rate'
-type Kind = 'text' | 'select' | 'num'
+type ColKey = 'field_name' | 'company' | 'base' | 'area' | 'crop' | 'p1' | 'p2' | 'p3' | 'p4' | 'potential' | 'tillage' | 'variety' | 'repro' | 'rate' | 'rate2'
+type Kind = 'text' | 'select' | 'num' | 'none'
 type Col = { key: ColKey; kind: Kind; num?: boolean }
 
 const PAGE = 1000
@@ -45,6 +47,7 @@ const COLS: Col[] = [
   { key: 'p1', kind: 'select' }, { key: 'p2', kind: 'select' }, { key: 'p3', kind: 'select' }, { key: 'p4', kind: 'select' },
   { key: 'potential', kind: 'select' }, { key: 'tillage', kind: 'select' },
   { key: 'variety', kind: 'select' }, { key: 'repro', kind: 'select' }, { key: 'rate', kind: 'num', num: true },
+  { key: 'rate2', kind: 'none', num: true },
 ]
 
 // значение на колона за един ред (за филтри и сортиране)
@@ -65,8 +68,15 @@ function textVal(r: Row, k: ColKey): string {
 }
 const seedVals = (r: Row, k: 'variety' | 'repro') =>
   (r.seeds ?? []).map((s) => (k === 'variety' ? s.variety : s.reproduction)).filter((x): x is string => !!x)
-const numVal = (r: Row, k: 'area' | 'rate'): number | null =>
-  k === 'area' ? r.area_da : ((r.seeds ?? []).find((s) => s.rate != null)?.rate ?? null)
+// втора норма: кг/дка (слети култури, по партида) или семена на хектар (редови култури: семена/дка × 10)
+function seedRate2(s: SeedRow | undefined): { v: number; text: string } | null {
+  if (!s || s.rate == null) return null
+  if (s.rate_basis === 'seeds_da') return { v: s.rate * 10, text: `${fmtInt(s.rate * 10)} сем./ха` }
+  if (s.kg_da != null) return { v: s.kg_da, text: `${fmtArea(s.kg_da)} кг/дка` }
+  return null
+}
+const numVal = (r: Row, k: 'area' | 'rate' | 'rate2'): number | null =>
+  k === 'area' ? r.area_da : k === 'rate' ? ((r.seeds ?? []).find((s) => s.rate != null)?.rate ?? null) : (seedRate2((r.seeds ?? [])[0])?.v ?? null)
 
 function CropCell({ crop, main }: { crop: string | null; main?: boolean }) {
   if (!crop) return <span className="empty">—</span>
@@ -87,6 +97,7 @@ export default function Rotation() {
   const [rng, setRng] = useState<Record<string, { min: string; max: string }>>({})  // площ, норма
   const [sort, setSort] = useState<{ key: ColKey; dir: 1 | -1 }>({ key: 'field_name', dir: 1 })
   const [openId, setOpenId] = useState<string | null>(null)
+  const colPrefs = useHiddenCols('rotation')
 
   useEffect(() => {
     let cancelled = false
@@ -100,18 +111,47 @@ export default function Rotation() {
           if (!data || data.length < PAGE) break
         }
         // потенциал и почвообработка за текущия сезон (основен период)
-        const { data: season } = await supabase.from('season').select('year_end').eq('is_current', true).limit(1)
+        const { data: season } = await supabase.from('season').select('year_end,season_id').eq('is_current', true).limit(1)
         const ye = season?.[0]?.year_end
         const extra = new Map<string, { potential: string | null; tillage: string | null }>()
+        const pl2field = new Map<string, string>()
         for (let from = 0; ; from += PAGE) {
           const { data, error } = await supabase.from('v_planting_context')
-            .select('field_id,potential_name,tillage_name')
+            .select('planting_id,field_id,potential_name,tillage_name')
             .eq('season_year_end', ye).eq('role', 'main').order('planting_id').range(from, from + PAGE - 1)
           if (error) throw new Error(error.message)
-          for (const x of (data ?? []) as { field_id: string; potential_name: string | null; tillage_name: string | null }[])
+          for (const x of (data ?? []) as { planting_id: string; field_id: string; potential_name: string | null; tillage_name: string | null }[]) {
             extra.set(x.field_id, { potential: x.potential_name, tillage: x.tillage_name })
+            pl2field.set(x.planting_id, x.field_id)
+          }
           if (!data || data.length < PAGE) break
         }
+        // втора почвообработка (ако миграцията е приложена; иначе се пропуска)
+        try {
+          const t2 = await supabase.from('field_planting').select('planting_id,tillage2_id').not('tillage2_id', 'is', null).limit(5000)
+          const tn = await supabase.from('tillage_type').select('tillage_id,name_bg')
+          if (!t2.error && !tn.error) {
+            const nm = new Map((tn.data ?? []).map((x: { tillage_id: number; name_bg: string }) => [x.tillage_id, x.name_bg]))
+            for (const x of (t2.data ?? []) as { planting_id: string; tillage2_id: number }[]) {
+              const fid = pl2field.get(x.planting_id); const e = fid ? extra.get(fid) : undefined
+              if (e && e.tillage && nm.get(x.tillage2_id)) e.tillage = `${e.tillage} + ${nm.get(x.tillage2_id)}`
+            }
+          }
+        } catch { /* колоната още не съществува */ }
+        // кг/дка за слетите култури – от изчислението на семената (по партида); ако липсва, колоната остава празна
+        try {
+          const sid = season?.[0]?.season_id
+          const [calc, vars] = await Promise.all([
+            supabase.from('v_seed_calc').select('planting_id,variety_id,rate_kg_da').eq('season_id', sid).not('rate_kg_da', 'is', null).limit(20000),
+            supabase.from('variety').select('variety_id,name').limit(5000),
+          ])
+          if (!calc.error && !vars.error) {
+            const vn = new Map((vars.data ?? []).map((v: { variety_id: string; name: string }) => [v.variety_id, v.name]))
+            const kg = new Map<string, number>()
+            for (const c of (calc.data ?? []) as { planting_id: string; variety_id: string; rate_kg_da: number }[]) kg.set(`${c.planting_id}|${vn.get(c.variety_id)}`, c.rate_kg_da)
+            for (const r of all) for (const sd of r.seeds ?? []) sd.kg_da = kg.get(`${r.planting_id}|${sd.variety}`) ?? null
+          }
+        } catch { /* без кг/дка */ }
         for (const r of all) { const e = extra.get(r.field_id); r.potential = e?.potential ?? null; r.tillage = e?.tillage ?? null }
         if (!cancelled) setRows(all)
       } catch (e) {
@@ -151,7 +191,7 @@ export default function Rotation() {
       for (const c of COLS) {
         if (c.kind === 'num') {
           const f = rng[c.key]; if (!f || (!f.min && !f.max)) continue
-          const v = numVal(r, c.key as 'area' | 'rate')
+          const v = numVal(r, c.key as 'area' | 'rate' | 'rate2')
           if (v == null) return false
           if (f.min && v < Number(f.min.replace(',', '.'))) return false
           if (f.max && v > Number(f.max.replace(',', '.'))) return false
@@ -172,7 +212,7 @@ export default function Rotation() {
     const { key, dir } = sort
     const col = COLS.find((c) => c.key === key)!
     list.sort((a, b) => {
-      if (col.kind === 'num') return ((numVal(a, key as 'area' | 'rate') ?? -1) - (numVal(b, key as 'area' | 'rate') ?? -1)) * dir
+      if (col.kind === 'num' || col.kind === 'none') return ((numVal(a, key as 'area' | 'rate' | 'rate2') ?? -1) - (numVal(b, key as 'area' | 'rate' | 'rate2') ?? -1)) * dir
       const f = (r: Row) => key === 'variety' || key === 'repro' ? (seedVals(r, key)[0] ?? '') : textVal(r, key)
       if (key === 'potential') return ((POT_RANK[f(a)] ?? 0) - (POT_RANK[f(b)] ?? 0)) * dir
       return f(a).localeCompare(f(b), 'bg') * dir
@@ -189,9 +229,11 @@ export default function Rotation() {
   const label: Record<ColKey, string> = {
     field_name: 'Наименование', company: 'Фирма', base: 'Стопанска база', area: 'Площ, дка', crop: `Култура ${seasonLabel ?? ''}`,
     p1: prevLabels[0] ?? '−1', p2: prevLabels[1] ?? '−2', p3: prevLabels[2] ?? '−3', p4: prevLabels[3] ?? '−4',
-    potential: 'Потенциал', tillage: 'Почвообработка', variety: 'Сорт / хибрид', repro: 'Размножение', rate: 'Сеитбена норма',
+    potential: 'Потенциал', tillage: 'Почвообработка', variety: 'Сорт / хибрид', repro: 'Размножение', rate: 'Сеитбена норма', rate2: 'кг/дка · сем./ха',
   }
   const cropKeys: ColKey[] = ['crop', 'p1', 'p2', 'p3', 'p4']
+  const shownCols = COLS.filter((c) => c.key === 'field_name' || colPrefs.vis(c.key))
+  const vis = (k: ColKey) => colPrefs.vis(k)
 
   return (
     <>
@@ -214,12 +256,18 @@ export default function Rotation() {
         <table className="grid">
           <thead>
             <tr>
-              {COLS.map((c) => (
-                <th key={c.key} className={c.num ? 'num' : ''}><button onClick={() => toggleSort(c.key)}>{label[c.key]} {arrow(c.key)}</button></th>
+              {shownCols.map((c) => (
+                <th key={c.key} className={c.num ? 'num' : ''}>
+                  <button onClick={() => toggleSort(c.key)}>{label[c.key]} {arrow(c.key)}</button>
+                  {c.key === 'field_name' && (
+                    <ColumnPicker items={COLS.filter((x) => x.key !== 'field_name').map((x) => ({ key: x.key, label: label[x.key] }))}
+                      hidden={colPrefs.hidden} onToggle={colPrefs.toggle} onShowAll={colPrefs.showAll} />
+                  )}
+                </th>
               ))}
             </tr>
             <tr className="filter-row">
-              {COLS.map((c) => (
+              {shownCols.map((c) => (
                 <th key={c.key} className={c.num ? 'num' : ''}>
                   {c.kind === 'text' && (
                     <input className="input fi" placeholder="Филтър" value={sel[c.key] ?? ''} onChange={(e) => setSel({ ...sel, [c.key]: e.target.value })} aria-label={`Филтър ${label[c.key]}`} />
@@ -255,23 +303,24 @@ export default function Rotation() {
                         {r.field_name}
                       </span>
                     </td>
-                    <td>{r.company_name ?? <span className="empty">—</span>}</td>
-                    <td>{r.farm_base_name ?? <span className="empty">—</span>}</td>
-                    <td className="num">{fmtArea(r.area_da)}</td>
-                    <td><CropCell crop={r.crop} main />{(r.n_second_crops ?? 0) > 0 && <> <span className="chip">+{r.n_second_crops}</span></>}</td>
-                    <td><CropCell crop={r.crop_prev1} /></td>
-                    <td><CropCell crop={r.crop_prev2} /></td>
-                    <td><CropCell crop={r.crop_prev3} /></td>
-                    <td><CropCell crop={r.crop_prev4} /></td>
-                    <td>{r.potential ?? <span className="empty">—</span>}</td>
-                    <td>{r.tillage ?? <span className="empty">—</span>}</td>
-                    <td>{s0?.variety ? <>{s0.variety}{seeds.length > 1 && <> <span className="chip">+{seeds.length - 1}</span></>}</> : <span className="empty">—</span>}</td>
-                    <td>{s0?.reproduction ?? <span className="empty">—</span>}</td>
-                    <td className="num">{s0?.rate != null ? fmtRate(s0.rate, s0.rate_basis) : <span className="empty">—</span>}</td>
+                    {vis('company') && (<td>{r.company_name ?? <span className="empty">—</span>}</td>)}
+                    {vis('base') && (<td>{r.farm_base_name ?? <span className="empty">—</span>}</td>)}
+                    {vis('area') && (<td className="num">{fmtArea(r.area_da)}</td>)}
+                    {vis('crop') && (<td><CropCell crop={r.crop} main />{(r.n_second_crops ?? 0) > 0 && <> <span className="chip">+{r.n_second_crops}</span></>}</td>)}
+                    {vis('p1') && (<td><CropCell crop={r.crop_prev1} /></td>)}
+                    {vis('p2') && (<td><CropCell crop={r.crop_prev2} /></td>)}
+                    {vis('p3') && (<td><CropCell crop={r.crop_prev3} /></td>)}
+                    {vis('p4') && (<td><CropCell crop={r.crop_prev4} /></td>)}
+                    {vis('potential') && (<td>{r.potential ?? <span className="empty">—</span>}</td>)}
+                    {vis('tillage') && (<td>{r.tillage ?? <span className="empty">—</span>}</td>)}
+                    {vis('variety') && (<td>{s0?.variety ? <>{s0.variety}{seeds.length > 1 && <> <span className="chip">+{seeds.length - 1}</span></>}</> : <span className="empty">—</span>}</td>)}
+                    {vis('repro') && (<td>{s0?.reproduction ?? <span className="empty">—</span>}</td>)}
+                    {vis('rate') && (<td className="num">{s0?.rate != null ? fmtRate(s0.rate, s0.rate_basis) : <span className="empty">—</span>}</td>)}
+                    {vis('rate2') && (<td className="num" title={s0 && s0.rate_basis !== 'seeds_da' && s0.kg_da == null ? 'Няма партида с мин. данни (МХЗ и кълняемост)' : undefined}>{seedRate2(s0)?.text ?? <span className="empty">—</span>}</td>)}
                   </tr>
                   {open && (
                     <tr className="detail">
-                      <td colSpan={COLS.length}>
+                      <td colSpan={shownCols.length}>
                         <div className="detail-grid detail">
                           <div>
                             <h3>Данни за БЗС</h3>
@@ -295,9 +344,9 @@ export default function Rotation() {
                           <div>
                             <h3>Сортове / хибриди</h3>
                             {seeds.length === 0 ? <span className="empty">Още няма въведени</span> : (
-                              <table className="mini"><thead><tr><th>Сорт</th><th>Размн.</th><th className="num">Площ</th><th className="num">Норма</th><th>Произход</th></tr></thead><tbody>
+                              <table className="mini"><thead><tr><th>Сорт</th><th>Размн.</th><th className="num">Площ</th><th className="num">Норма</th><th className="num">кг/дка · сем./ха</th><th>Произход</th></tr></thead><tbody>
                                 {seeds.map((s, i) => (
-                                  <tr key={i}><td>{s.variety ?? '—'}</td><td>{s.reproduction ?? '—'}</td><td className="num">{fmtArea(s.area_da)}</td><td className="num">{s.rate != null ? fmtRate(s.rate, s.rate_basis) : '—'}</td><td>{s.origin ?? '—'}</td></tr>
+                                  <tr key={i}><td>{s.variety ?? '—'}</td><td>{s.reproduction ?? '—'}</td><td className="num">{fmtArea(s.area_da)}</td><td className="num">{s.rate != null ? fmtRate(s.rate, s.rate_basis) : '—'}</td><td className="num">{seedRate2(s)?.text ?? '—'}</td><td>{s.origin ?? '—'}</td></tr>
                                 ))}
                               </tbody></table>
                             )}
@@ -310,7 +359,7 @@ export default function Rotation() {
               )
             })}
             {!loading && view.length === 0 && (
-              <tr><td colSpan={COLS.length} className="empty">Няма полета по тези филтри.</td></tr>
+              <tr><td colSpan={shownCols.length} className="empty">Няма полета по тези филтри.</td></tr>
             )}
           </tbody>
         </table>

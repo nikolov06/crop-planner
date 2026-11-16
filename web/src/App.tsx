@@ -7,11 +7,13 @@ import Nomenclatures from './pages/Nomenclatures'
 import SeedPlanning from './pages/SeedPlanning'
 import PrzPlanning from './pages/PrzPlanning'
 import FertPlanning from './pages/FertPlanning'
+import TillagePlanning from './pages/TillagePlanning'
 
-type PageKey = 'rotation' | 'seeds' | 'fert' | 'prz' | 'nomenclatures'
+type PageKey = 'rotation' | 'seeds' | 'tillage' | 'fert' | 'prz' | 'nomenclatures'
 
 const NAV: { key: PageKey; label: string; sepBefore?: boolean }[] = [
   { key: 'rotation', label: 'Сеитбооборот' },
+  { key: 'tillage', label: 'Почвообработка' },
   { key: 'seeds', label: 'Планиране семена' },
   { key: 'fert', label: 'Планиране торове' },
   { key: 'prz', label: 'Продукти за растителна защита' },
@@ -89,6 +91,7 @@ export default function App() {
       <main className="content">
         {page === 'rotation' && <Rotation />}
         {page === 'seeds' && <SeedPlanning />}
+        {page === 'tillage' && <TillagePlanning />}
         {page === 'fert' && <FertPlanning />}
         {page === 'prz' && <PrzPlanning />}
         {page === 'nomenclatures' && <Nomenclatures />}

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { fmtArea, fmtInt, cropColor, cropLabel } from '../lib/format'
+import { ColumnPicker, useHiddenCols } from '../lib/columns'
 
 // ───────────────────────── типове ─────────────────────────
 type Planting = {
@@ -87,6 +88,8 @@ function avPerDa(p: Product, rate: number): Av | null {
 
 // ───────────────────────── компонент ─────────────────────────
 export default function FertPlanning() {
+  const colPrefs = useHiddenCols('fert')
+  const vis = colPrefs.vis
   const [plantings, setPlantings] = useState<Planting[]>([])
   const [stages, setStages] = useState<Stage[]>([])
   const [products, setProducts] = useState<Product[]>([])
@@ -377,7 +380,15 @@ export default function FertPlanning() {
       (prodById.get(a.product_id)?.name ?? '').localeCompare(prodById.get(b.product_id)?.name ?? '', 'bg'))
   }, [view, lines, stages, prodById, plantingById])
 
-  const COLS = 9 + stages.length
+  const pickerItems = [...[
+    { key: 'company', label: 'Фирма' },
+    { key: 'base', label: 'Стопанска база' },
+    { key: 'crop', label: 'Култура' },
+    { key: 'area', label: 'Площ, дка' },
+    { key: 'potential', label: 'Потенциал' }
+  ], ...stages.map((s) => ({ key: 's' + s.stage_id, label: s.name_bg })),
+    { key: 'n', label: 'N, кг/дка' }, { key: 'p', label: 'P₂O₅, кг/дка' }, { key: 'k', label: 'K₂O, кг/дка' }]
+  const COLS = 2 + pickerItems.filter((i) => vis(i.key)).length
 
   return (
     <>
@@ -413,21 +424,21 @@ export default function FertPlanning() {
           <thead>
             <tr>
               <th style={{ width: 36 }}><input type="checkbox" aria-label="Избери всички показани" checked={allShownSelected} onChange={toggleAll} /></th>
-              <th><button onClick={() => toggleSort('field_name')}>Наименование {arrow('field_name')}</button></th>
-              <th><button onClick={() => toggleSort('company')}>Фирма {arrow('company')}</button></th>
-              <th><button onClick={() => toggleSort('base')}>Стопанска база {arrow('base')}</button></th>
-              <th><button onClick={() => toggleSort('crop')}>Култура {arrow('crop')}</button></th>
-              <th className="num"><button onClick={() => toggleSort('area')}>Площ, дка {arrow('area')}</button></th>
-              <th><button onClick={() => toggleSort('potential')}>Потенциал {arrow('potential')}</button></th>
-              {stages.map((s) => <th key={s.stage_id}>{s.name_bg}</th>)}
-              <th className="num"><button onClick={() => toggleSort('n')}>N, кг/дка {arrow('n')}</button></th>
-              <th className="num"><button onClick={() => toggleSort('p')}>P₂O₅, кг/дка {arrow('p')}</button></th>
-              <th className="num"><button onClick={() => toggleSort('k')}>K₂O, кг/дка {arrow('k')}</button></th>
+              <th><button onClick={() => toggleSort('field_name')}>Наименование {arrow('field_name')}</button><ColumnPicker items={pickerItems} hidden={colPrefs.hidden} onToggle={colPrefs.toggle} onShowAll={colPrefs.showAll} /></th>
+              {vis('company') && (<th><button onClick={() => toggleSort('company')}>Фирма {arrow('company')}</button></th>)}
+              {vis('base') && (<th><button onClick={() => toggleSort('base')}>Стопанска база {arrow('base')}</button></th>)}
+              {vis('crop') && (<th><button onClick={() => toggleSort('crop')}>Култура {arrow('crop')}</button></th>)}
+              {vis('area') && (<th className="num"><button onClick={() => toggleSort('area')}>Площ, дка {arrow('area')}</button></th>)}
+              {vis('potential') && (<th><button onClick={() => toggleSort('potential')}>Потенциал {arrow('potential')}</button></th>)}
+              {stages.filter((s) => vis('s' + s.stage_id)).map((s) => <th key={s.stage_id}>{s.name_bg}</th>)}
+              {vis('n') && (<th className="num"><button onClick={() => toggleSort('n')}>N, кг/дка {arrow('n')}</button></th>)}
+              {vis('p') && (<th className="num"><button onClick={() => toggleSort('p')}>P₂O₅, кг/дка {arrow('p')}</button></th>)}
+              {vis('k') && (<th className="num"><button onClick={() => toggleSort('k')}>K₂O, кг/дка {arrow('k')}</button></th>)}
             </tr>
             <tr className="filter-row">
               <th />
               <th><input className="input fi" placeholder="Филтър" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Филтър Наименование" /></th>
-              {(['company', 'base', 'crop'] as const).map((k) => (
+              {(['company', 'base', 'crop'] as const).filter((k) => vis(k)).map((k) => (
                 <th key={k}>
                   <select className="input fi" value={fSel[k] ?? ''} onChange={(e) => setF(k, e.target.value)} aria-label={`Филтър ${k}`}>
                     <option value="">Всички</option><option value={EMPTY}>— празно —</option>
@@ -435,19 +446,19 @@ export default function FertPlanning() {
                   </select>
                 </th>
               ))}
-              <th className="num">
+              {vis('area') && <th className="num">
                 <span className="range">
                   <input className="input fi" inputMode="decimal" placeholder="от" value={fArea.min} onChange={(e) => setFArea({ ...fArea, min: e.target.value })} aria-label="Площ от" />
                   <input className="input fi" inputMode="decimal" placeholder="до" value={fArea.max} onChange={(e) => setFArea({ ...fArea, max: e.target.value })} aria-label="Площ до" />
                 </span>
-              </th>
-              <th>
+              </th>}
+              {vis('potential') && <th>
                 <select className="input fi" value={fSel.potential ?? ''} onChange={(e) => setF('potential', e.target.value)} aria-label="Филтър потенциал">
                   <option value="">Всички</option><option value={EMPTY}>— празно —</option>
                   {opts.potential.map((v) => <option key={v} value={v}>{v}</option>)}
                 </select>
-              </th>
-              {stages.map((s) => (
+              </th>}
+              {stages.filter((s) => vis('s' + s.stage_id)).map((s) => (
                 <th key={s.stage_id}>
                   <select className="input fi" value={fSel['s' + s.stage_id] ?? ''} onChange={(e) => setF('s' + s.stage_id, e.target.value)} aria-label={`Филтър ${s.name_bg}`}>
                     <option value="">Всички</option><option value={EMPTY}>— няма —</option><option value={ANY}>— има —</option>
@@ -455,7 +466,7 @@ export default function FertPlanning() {
                   </select>
                 </th>
               ))}
-              <th /><th /><th />
+              {vis('n') && <th />}{vis('p') && <th />}{vis('k') && <th />}
             </tr>
           </thead>
           <tbody>
@@ -467,12 +478,12 @@ export default function FertPlanning() {
                 <tr key={p.planting_id} className={`row ${on ? 'open' : ''}`} onClick={(e) => pick(idx, e)}>
                   <td><input type="checkbox" checked={on} onChange={() => undefined} aria-label={`Избери ${p.field_name}`} /></td>
                   <td><span className="name">{p.field_name}</span></td>
-                  <td>{p.company_name ?? <span className="empty">—</span>}</td>
-                  <td>{p.farm_base_name ?? <span className="empty">—</span>}</td>
-                  <td><span className="crop crop-main"><span className="dot" style={{ background: cropColor(p.crop_name) }} />{cropLabel(p.crop_name)}</span></td>
-                  <td className="num">{fmtArea(p.planted_area_da)}</td>
-                  <td>{p.potential_name ?? <span className="empty">—</span>}</td>
-                  {stages.map((s) => {
+                  {vis('company') && <td>{p.company_name ?? <span className="empty">—</span>}</td>}
+                  {vis('base') && <td>{p.farm_base_name ?? <span className="empty">—</span>}</td>}
+                  {vis('crop') && <td><span className="crop crop-main"><span className="dot" style={{ background: cropColor(p.crop_name) }} />{cropLabel(p.crop_name)}</span></td>}
+                  {vis('area') && <td className="num">{fmtArea(p.planted_area_da)}</td>}
+                  {vis('potential') && <td>{p.potential_name ?? <span className="empty">—</span>}</td>}
+                  {stages.filter((s) => vis('s' + s.stage_id)).map((s) => {
                     const cell = items.filter((l) => l.stage_id === s.stage_id)
                     return (
                       <td key={s.stage_id} style={{ whiteSpace: 'normal', minWidth: 160 }}>
@@ -490,9 +501,9 @@ export default function FertPlanning() {
                       </td>
                     )
                   })}
-                  <td className="num">{v ? num2(v.av.n) : <span className="empty">—</span>}{v?.missing ? ' ⚠' : ''}</td>
-                  <td className="num">{v ? num2(v.av.p) : <span className="empty">—</span>}</td>
-                  <td className="num">{v ? num2(v.av.k) : <span className="empty">—</span>}</td>
+                  {vis('n') && <td className="num">{v ? num2(v.av.n) : <span className="empty">—</span>}{v?.missing ? ' ⚠' : ''}</td>}
+                  {vis('p') && <td className="num">{v ? num2(v.av.p) : <span className="empty">—</span>}</td>}
+                  {vis('k') && <td className="num">{v ? num2(v.av.k) : <span className="empty">—</span>}</td>}
                 </tr>
               )
             })}

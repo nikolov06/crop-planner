@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { fmtArea, fmtInt, cropColor, cropLabel } from '../lib/format'
+import { ColumnPicker, useHiddenCols } from '../lib/columns'
 
 // ───────────────────────── типове ─────────────────────────
 type Stage = 't1' | 't2' | 'corrective' | 'total_herbicide_pre'
@@ -98,6 +99,8 @@ type Reg = { minN: number | null; maxN: number | null; phi: number | null; apps:
 
 // ───────────────────────── компонент ─────────────────────────
 export default function PrzPlanning() {
+  const colPrefs = useHiddenCols('prz')
+  const vis = colPrefs.vis
   const [plantings, setPlantings] = useState<Planting[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [pnames, setPnames] = useState<PName[]>([])
@@ -443,7 +446,15 @@ export default function PrzPlanning() {
       (prodById.get(a.id)?.trade_name ?? '').localeCompare(prodById.get(b.id)?.trade_name ?? '', 'bg'))
   }, [view, assigns, prodById])
 
-  const COLS = 12
+  const pickerItems = [...[
+    { key: 'company', label: 'Фирма' },
+    { key: 'base', label: 'Стопанска база' },
+    { key: 'crop', label: 'Култура' },
+    { key: 'area', label: 'Площ, дка' },
+    { key: 'potential', label: 'Потенциал' },
+    { key: 'tillage', label: 'Почвообработка' }
+  ], ...STAGES.map((s) => ({ key: s.key, label: s.short }))]
+  const COLS = 2 + pickerItems.filter((i) => vis(i.key)).length
 
   // ───────────────────────── изглед ─────────────────────────
   return (
@@ -480,19 +491,19 @@ export default function PrzPlanning() {
           <thead>
             <tr>
               <th style={{ width: 36 }}><input type="checkbox" aria-label="Избери всички показани" checked={allShownSelected} onChange={toggleAll} /></th>
-              <th><button onClick={() => toggleSort('field_name')}>Наименование {arrow('field_name')}</button></th>
-              <th><button onClick={() => toggleSort('company')}>Фирма {arrow('company')}</button></th>
-              <th><button onClick={() => toggleSort('base')}>Стопанска база {arrow('base')}</button></th>
-              <th><button onClick={() => toggleSort('crop')}>Култура {arrow('crop')}</button></th>
-              <th className="num"><button onClick={() => toggleSort('area')}>Площ, дка {arrow('area')}</button></th>
-              <th><button onClick={() => toggleSort('potential')}>Потенциал {arrow('potential')}</button></th>
-              <th><button onClick={() => toggleSort('tillage')}>Почвообработка {arrow('tillage')}</button></th>
-              {STAGES.map((s) => <th key={s.key}>{s.short}</th>)}
+                            <th><button onClick={() => toggleSort('field_name')}>Наименование {arrow('field_name')}</button><ColumnPicker items={pickerItems} hidden={colPrefs.hidden} onToggle={colPrefs.toggle} onShowAll={colPrefs.showAll} /></th>
+              {vis('company') && (<th><button onClick={() => toggleSort('company')}>Фирма {arrow('company')}</button></th>)}
+              {vis('base') && (<th><button onClick={() => toggleSort('base')}>Стопанска база {arrow('base')}</button></th>)}
+              {vis('crop') && (<th><button onClick={() => toggleSort('crop')}>Култура {arrow('crop')}</button></th>)}
+              {vis('area') && (<th className="num"><button onClick={() => toggleSort('area')}>Площ, дка {arrow('area')}</button></th>)}
+              {vis('potential') && (<th><button onClick={() => toggleSort('potential')}>Потенциал {arrow('potential')}</button></th>)}
+              {vis('tillage') && (<th><button onClick={() => toggleSort('tillage')}>Почвообработка {arrow('tillage')}</button></th>)}
+              {STAGES.filter((s) => vis(s.key)).map((s) => <th key={s.key}>{s.short}</th>)}
             </tr>
             <tr className="filter-row">
               <th />
               <th><input className="input fi" placeholder="Филтър" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Филтър Наименование" /></th>
-              {(['company', 'base', 'crop'] as const).map((k) => (
+              {(['company', 'base', 'crop'] as const).filter((k) => vis(k)).map((k) => (
                 <th key={k}>
                   <select className="input fi" value={fSel[k] ?? ''} onChange={(e) => setF(k, e.target.value)} aria-label={`Филтър ${k}`}>
                     <option value="">Всички</option><option value={EMPTY}>— празно —</option>
@@ -500,13 +511,13 @@ export default function PrzPlanning() {
                   </select>
                 </th>
               ))}
-              <th className="num">
+              {vis('area') && <th className="num">
                 <span className="range">
                   <input className="input fi" inputMode="decimal" placeholder="от" value={fArea.min} onChange={(e) => setFArea({ ...fArea, min: e.target.value })} aria-label="Площ от" />
                   <input className="input fi" inputMode="decimal" placeholder="до" value={fArea.max} onChange={(e) => setFArea({ ...fArea, max: e.target.value })} aria-label="Площ до" />
                 </span>
-              </th>
-              {(['potential', 'tillage'] as const).map((k) => (
+              </th>}
+              {(['potential', 'tillage'] as const).filter((k) => vis(k)).map((k) => (
                 <th key={k}>
                   <select className="input fi" value={fSel[k] ?? ''} onChange={(e) => setF(k, e.target.value)} aria-label={`Филтър ${k}`}>
                     <option value="">Всички</option><option value={EMPTY}>— празно —</option>
@@ -514,7 +525,7 @@ export default function PrzPlanning() {
                   </select>
                 </th>
               ))}
-              {STAGES.map((s) => (
+              {STAGES.filter((s) => vis(s.key)).map((s) => (
                 <th key={s.key}>
                   <select className="input fi" value={fSel[s.key] ?? ''} onChange={(e) => setF(s.key, e.target.value)} aria-label={`Филтър ${s.short}`}>
                     <option value="">Всички</option><option value={EMPTY}>— няма —</option><option value={ANY}>— има —</option>
@@ -532,13 +543,13 @@ export default function PrzPlanning() {
                 <tr key={p.planting_id} className={`row ${on ? 'open' : ''}`} onClick={(e) => pick(idx, e)}>
                   <td><input type="checkbox" checked={on} onChange={() => undefined} aria-label={`Избери ${p.field_name}`} /></td>
                   <td><span className="name">{p.field_name}</span></td>
-                  <td>{p.company_name ?? <span className="empty">—</span>}</td>
-                  <td>{p.farm_base_name ?? <span className="empty">—</span>}</td>
-                  <td><span className="crop crop-main"><span className="dot" style={{ background: cropColor(p.crop_name) }} />{cropLabel(p.crop_name)}</span></td>
-                  <td className="num">{fmtArea(p.planted_area_da)}</td>
-                  <td>{p.potential_name ?? <span className="empty">—</span>}</td>
-                  <td>{p.tillage_name ?? <span className="empty">—</span>}</td>
-                  {STAGES.map((s) => {
+                  {vis('company') && <td>{p.company_name ?? <span className="empty">—</span>}</td>}
+                  {vis('base') && <td>{p.farm_base_name ?? <span className="empty">—</span>}</td>}
+                  {vis('crop') && <td><span className="crop crop-main"><span className="dot" style={{ background: cropColor(p.crop_name) }} />{cropLabel(p.crop_name)}</span></td>}
+                  {vis('area') && <td className="num">{fmtArea(p.planted_area_da)}</td>}
+                  {vis('potential') && <td>{p.potential_name ?? <span className="empty">—</span>}</td>}
+                  {vis('tillage') && <td>{p.tillage_name ?? <span className="empty">—</span>}</td>}
+                  {STAGES.filter((s) => vis(s.key)).map((s) => {
                     const cell = items.filter((a) => a.stage === s.key)
                     return (
                       <td key={s.key} style={{ whiteSpace: 'normal', minWidth: 170 }}>
