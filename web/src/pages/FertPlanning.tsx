@@ -3,6 +3,8 @@ import { supabase } from '../lib/supabase'
 import { fmtArea, fmtInt, cropColor, cropLabel } from '../lib/format'
 import { ColumnPicker, useHiddenCols } from '../lib/columns'
 import { MultiFilter, anyToken } from '../lib/multifilter'
+import { downloadXlsx } from '../lib/xlsx'
+import { costFert, fmtEuro, loadPrices, priceText, type Price } from '../lib/prices'
 
 // ───────────────────────── типове ─────────────────────────
 type Planting = {
@@ -95,6 +97,9 @@ export default function FertPlanning() {
   const [stages, setStages] = useState<Stage[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [lines, setLines] = useState<Line[]>([])
+  const [prices, setPrices] = useState<Map<string, Price>>(new Map())
+  const [pricesOk, setPricesOk] = useState(false)
+  const [seasonLabel, setSeasonLabel] = useState('')
   const [allowed, setAllowed] = useState<Allowed[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -123,7 +128,7 @@ export default function FertPlanning() {
   async function load() {
     setLoading(true); setError(null)
     try {
-      const { data: season, error: se } = await supabase.from('season').select('year_end').eq('is_current', true).limit(1)
+      const { data: season, error: se } = await supabase.from('season').select('year_end,season_id,label').eq('is_current', true).limit(1)
       if (se) throw new Error(se.message)
       const ye = season?.[0]?.year_end
       const pl = await fetchAll<Planting>((f, t) =>
@@ -141,6 +146,8 @@ export default function FertPlanning() {
         fetchAll<Allowed>((f, t) => supabase.from('stage_product')
           .select('organization_id,stage_id,product_id,farm_base_id,is_active').order('stage_product_id').range(f, t)),
       ])
+      const pc = await loadPrices(season?.[0]?.season_id, 'fert')
+      setPrices(pc.map); setPricesOk(pc.ok); setSeasonLabel(season?.[0]?.label ?? '')
       setPlantings(pl); setStages((st.data ?? []) as Stage[]); setProducts(pr); setLines(ln); setAllowed(al)
       if (!stageId && st.data && st.data.length) setStageId((st.data as Stage[])[0].stage_id)
     } catch (e) { setError((e as Error).message) }
@@ -379,6 +386,45 @@ export default function FertPlanning() {
       (prodById.get(a.product_id)?.name ?? '').localeCompare(prodById.get(b.product_id)?.name ?? '', 'bg'))
   }, [view, lines, stages, prodById, plantingById])
 
+  // ── стойност ──
+  const lineQty = (l: Line) => l.rate_per_da * (l.treated_area_da ?? plantingById.get(l.planting_id)?.planted_area_da ?? 0)
+  const lineCost = (l: Line): number | null => {
+    const pr = prodById.get(l.product_id); if (!pr) return null
+    const qty = lineQty(l); const rho = rhoOf(pr)
+    const kg = pr.form === 'solid' ? qty : rho != null ? qty * rho : NaN
+    const c = costFert({ kg, t: kg / 1000, native: qty, liquid: pr.form === 'liquid' }, prices.get(l.product_id))
+    return c == null || !Number.isFinite(c) ? null : c
+  }
+  const costBy = useMemo(() => {
+    const m = new Map<string, { cost: number; missing: number }>()
+    for (const l of lines) {
+      const c = lineCost(l); const cur = m.get(l.planting_id) ?? { cost: 0, missing: 0 }
+      if (c == null) cur.missing += 1; else cur.cost += c
+      m.set(l.planting_id, cur)
+    }
+    return m
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lines, prices, prodById, plantingById])
+  const totalCost = useMemo(() => {
+    let cost = 0, missing = 0
+    for (const p of view) { const c = costBy.get(p.planting_id); if (c) { cost += c.cost; missing += c.missing } }
+    return { cost, missing }
+  }, [view, costBy])
+
+  function exportXlsx() {
+    const ids = new Set(view.map((p) => p.planting_id))
+    const rows: (string | number | null)[][] = []
+    for (const l of lines) {
+      if (!ids.has(l.planting_id)) continue
+      const p = plantingById.get(l.planting_id); const pr = prodById.get(l.product_id); if (!p || !pr) continue
+      const qty = lineQty(l); const rho = rhoOf(pr); const price = prices.get(l.product_id); const c = lineCost(l)
+      rows.push([p.field_name, p.company_name, p.farm_base_name, p.crop_name, p.planted_area_da, stages.find((x) => x.stage_id === l.stage_id)?.name_bg ?? '', pr.name, l.rate_per_da, UNIT_LABEL[l.unit],
+        l.treated_area_da ?? p.planted_area_da, Math.round(qty * 100) / 100, pr.form === 'liquid' ? 'л' : 'кг', rho != null ? Math.round((qty * rho) / 10) / 100 : null,
+        price?.supplier ?? null, price ? price.price : null, price ? `евро/${price.unit === 't' ? 'т' : price.unit === 'kg' ? 'кг' : 'л'}` : null, c == null ? null : Math.round(c * 100) / 100])
+    }
+    downloadXlsx(`Торове_план_${seasonLabel.replace('/', '-')}.xlsx`, 'Торове план', ['БЗС', 'Фирма', 'Стопанска база', 'Култура', 'Засята площ, дка', 'Етап', 'Продукт', 'Норма', 'Единица на нормата', 'Третирана площ, дка', 'Количество', 'Мярка', 'Тонове', 'Доставчик', 'Цена', 'Единица на цената', 'Стойност, евро'], rows)
+  }
+
   const pickerItems = [...[
     { key: 'company', label: 'Фирма' },
     { key: 'base', label: 'Стопанска база' },
@@ -386,14 +432,15 @@ export default function FertPlanning() {
     { key: 'area', label: 'Площ, дка' },
     { key: 'potential', label: 'Потенциал' }
   ], ...stages.map((s) => ({ key: 's' + s.stage_id, label: s.name_bg })),
-    { key: 'n', label: 'N, кг/дка' }, { key: 'p', label: 'P₂O₅, кг/дка' }, { key: 'k', label: 'K₂O, кг/дка' }]
+    { key: 'n', label: 'N, кг/дка' }, { key: 'p', label: 'P₂O₅, кг/дка' }, { key: 'k', label: 'K₂O, кг/дка' },
+    ...(pricesOk ? [{ key: 'cost', label: 'Стойност, евро' }, { key: 'costda', label: 'евро/дка' }] : [])]
   const COLS = 2 + pickerItems.filter((i) => vis(i.key)).length
 
   return (
     <>
       <div className="page-head">
         <h1>Планиране на торове</h1>
-        <span className="muted">{loading ? 'Зареждане…' : `${view.length} от ${plantings.length} БЗС · ${fmtArea(totals.area)} дка · N ${fmtInt(totals.n / 1000)} т · P₂O₅ ${fmtInt(totals.p / 1000)} т · K₂O ${fmtInt(totals.k / 1000)} т`}</span>
+        <span className="muted">{loading ? 'Зареждане…' : `${view.length} от ${plantings.length} БЗС · ${fmtArea(totals.area)} дка · N ${fmtInt(totals.n / 1000)} т · P₂O₅ ${fmtInt(totals.p / 1000)} т · K₂O ${fmtInt(totals.k / 1000)} т${pricesOk && totalCost.cost > 0 ? ` · стойност ${fmtEuro(totalCost.cost)} евро${totalCost.missing > 0 ? ` (без ${totalCost.missing} реда без цена)` : ''}` : ''}`}</span>
       </div>
 
       {error && <div className="banner err" role="alert">Грешка: {error}</div>}
@@ -404,6 +451,7 @@ export default function FertPlanning() {
           <input className="input" type="search" value={q} onChange={(e) => setQ(e.target.value)} />
         </label>
         <button className="btn outline" onClick={clearFilters} disabled={activeFilters === 0}>Изчисти филтрите{activeFilters ? ` (${activeFilters})` : ''}</button>
+        <button className="btn outline" onClick={exportXlsx} disabled={lines.length === 0}>Експорт в Excel{pricesOk ? ' (с разходи)' : ''}</button>
       </div>
 
       {sel.size > 0 && (
@@ -433,6 +481,8 @@ export default function FertPlanning() {
               {vis('n') && (<th className="num"><button onClick={() => toggleSort('n')}>N, кг/дка {arrow('n')}</button></th>)}
               {vis('p') && (<th className="num"><button onClick={() => toggleSort('p')}>P₂O₅, кг/дка {arrow('p')}</button></th>)}
               {vis('k') && (<th className="num"><button onClick={() => toggleSort('k')}>K₂O, кг/дка {arrow('k')}</button></th>)}
+              {pricesOk && vis('cost') && <th className="num">Стойност, евро</th>}
+              {pricesOk && vis('costda') && <th className="num">евро/дка</th>}
             </tr>
             <tr className="filter-row">
               <th />
@@ -461,6 +511,8 @@ export default function FertPlanning() {
                 </th>
               ))}
               {vis('n') && <th />}{vis('p') && <th />}{vis('k') && <th />}
+              {pricesOk && vis('cost') && <th />}
+              {pricesOk && vis('costda') && <th />}
             </tr>
           </thead>
           <tbody>
@@ -498,6 +550,15 @@ export default function FertPlanning() {
                   {vis('n') && <td className="num">{v ? num2(v.av.n) : <span className="empty">—</span>}{v?.missing ? ' ⚠' : ''}</td>}
                   {vis('p') && <td className="num">{v ? num2(v.av.p) : <span className="empty">—</span>}</td>}
                   {vis('k') && <td className="num">{v ? num2(v.av.k) : <span className="empty">—</span>}</td>}
+                  {pricesOk && (() => {
+                    const c = costBy.get(p.planting_id); const area = p.planted_area_da ?? 0; const partial = !!c && c.missing > 0
+                    return (
+                      <>
+                        {vis('cost') && <td className="num">{c ? (c.cost > 0 || !partial ? fmtEuro(c.cost) : '—') : <span className="empty">—</span>}{partial && <> <span className="chip warn" title={`${c?.missing} назначени продукта нямат цена в офертите`}>непълна</span></>}</td>}
+                        {vis('costda') && <td className="num">{c && area > 0 && (c.cost > 0 || !partial) ? fmtEuro(c.cost / area) : <span className="empty">—</span>}{partial && c && c.cost > 0 ? '+' : ''}</td>}
+                      </>
+                    )
+                  })()}
                 </tr>
               )
             })}
@@ -510,7 +571,7 @@ export default function FertPlanning() {
         <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Потребност за показаните БЗС ({summary.length} реда)</summary>
         {summary.length === 0 ? <p className="muted">Още няма назначени торове за показаните БЗС.</p> : (
           <table className="grid narrow" style={{ marginTop: 12 }}>
-            <thead><tr><th>Етап</th><th>Продукт</th><th className="num">БЗС</th><th className="num">Площ, дка</th><th className="num">Количество</th><th className="num">Тонове</th></tr></thead>
+            <thead><tr><th>Етап</th><th>Продукт</th><th className="num">БЗС</th><th className="num">Площ, дка</th><th className="num">Количество</th><th className="num">Тонове</th>{pricesOk && <><th>Цена</th><th className="num">Стойност, евро</th></>}</tr></thead>
             <tbody>
               {summary.map((s, i) => {
                 const pr = prodById.get(s.product_id)
@@ -523,6 +584,17 @@ export default function FertPlanning() {
                     <td className="num">{fmtArea(s.area)}</td>
                     <td className="num">{fmtInt(s.qty)} {pr?.form === 'liquid' ? 'л' : 'кг'}</td>
                     <td className="num">{rho != null ? num2((s.qty * rho) / 1000) : <span className="empty">—</span>}</td>
+                    {pricesOk && (() => {
+                      const price = prices.get(s.product_id)
+                      const kg = pr?.form === 'solid' ? s.qty : rho != null ? s.qty * rho : NaN
+                      const c = pr ? costFert({ kg, t: kg / 1000, native: s.qty, liquid: pr.form === 'liquid' }, price) : null
+                      return (
+                        <>
+                          <td>{price ? <>{priceText(price)} <span className="muted">· {price.supplier}</span></> : <span className="chip warn">няма цена</span>}</td>
+                          <td className="num">{c == null || !Number.isFinite(c) ? (price ? <span className="chip warn" title="Цената е в единица, която не може да се преобрази (липсва плътност или е л за твърд тор)">единица?</span> : '—') : fmtEuro(c)}</td>
+                        </>
+                      )
+                    })()}
                   </tr>
                 )
               })}
@@ -593,6 +665,14 @@ export default function FertPlanning() {
                     <div>Общо за {preview.count} БЗС: <strong>{fmtInt(preview.qty)} {preview.unit === 'kg_da' ? 'кг' : 'л'}</strong>
                       {preview.tons != null ? ` (${num2(preview.tons)} т)` : ''} на {fmtArea(preview.area)} дка
                       {preview.skipped > 0 ? ` · ${preview.skipped} без засета площ ще се пропуснат` : ''}</div>
+                    {pricesOk && chosenProduct && (() => {
+                      const price = prices.get(chosenProduct.product_id)
+                      if (!price) return <div className="muted" style={{ marginTop: 6 }}>Стойност: няма цена за този продукт – добави оферта в „Торове → Оферти“.</div>
+                      const kg = preview.unit === 'kg_da' ? preview.qty : preview.tons != null ? preview.tons * 1000 : NaN
+                      const c = costFert({ kg, t: kg / 1000, native: preview.qty, liquid: preview.unit === 'l_da' }, price)
+                      if (c == null || !Number.isFinite(c)) return <div className="muted" style={{ marginTop: 6 }}>Цената е в единица ({priceText(price)}), която не може да се приложи към това количество (липсва плътност?).</div>
+                      return <div style={{ marginTop: 6 }}>Стойност: <strong>≈ {fmtEuro(c)} евро</strong> <span className="muted">({priceText(price)}{price.supplier ? ` · ${price.supplier}` : ''}) · {fmtEuro(c / (preview.area || 1))} евро/дка</span></div>
+                    })()}
                     {preview.av && (
                       <div className="muted" style={{ marginTop: 4 }}>
                         Активни вещества на дка: N {num2(preview.av.n)} · P₂O₅ {num2(preview.av.p)} · K₂O {num2(preview.av.k)} · S {num2(preview.av.s)} кг.

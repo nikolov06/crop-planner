@@ -69,6 +69,9 @@ button, input, select { font: inherit; color: inherit; }
 }
 .nav-item:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
 .nav-item[aria-current='page'] { background: var(--accent); color: #fff; font-weight: 600; }
+.nav-group { display: flex; justify-content: space-between; align-items: center; }
+.nav-group[data-active='true'] { color: #fff; font-weight: 600; }
+.nav-sub { padding-left: 28px; font-size: 14px; }
 .nav-sep { height: 1px; background: rgba(255, 255, 255, 0.14); margin: 10px 12px; }
 .nav-spacer { flex: 1; }
 .nav-user { font-size: 13px; color: var(--nav-ink); padding: 8px 12px 0 12px; word-break: break-all; }

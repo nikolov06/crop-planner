@@ -3,6 +3,8 @@ import { supabase } from '../lib/supabase'
 import { fmtArea, fmtInt, cropColor, cropLabel } from '../lib/format'
 import { ColumnPicker, useHiddenCols } from '../lib/columns'
 import { MultiFilter, anyToken } from '../lib/multifilter'
+import { downloadXlsx } from '../lib/xlsx'
+import { costPrz, fmtEuro, loadPrices, priceText, type Price } from '../lib/prices'
 
 // ───────────────────────── типове ─────────────────────────
 type Stage = 't1' | 't2' | 'corrective' | 'total_herbicide_pre'
@@ -107,6 +109,9 @@ export default function PrzPlanning() {
   const [pnames, setPnames] = useState<PName[]>([])
   const [uses, setUses] = useState<Use[]>([])
   const [assigns, setAssigns] = useState<Assign[]>([])
+  const [prices, setPrices] = useState<Map<string, Price>>(new Map())
+  const [pricesOk, setPricesOk] = useState(false)
+  const [seasonLabel, setSeasonLabel] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
@@ -140,7 +145,7 @@ export default function PrzPlanning() {
     setLoading(true)
     setError(null)
     try {
-      const { data: season, error: se } = await supabase.from('season').select('year_end').eq('is_current', true).limit(1)
+      const { data: season, error: se } = await supabase.from('season').select('year_end,season_id,label').eq('is_current', true).limit(1)
       if (se) throw new Error(se.message)
       const ye = season?.[0]?.year_end
       const pl = await fetchAll<Planting>((f, t) =>
@@ -153,6 +158,8 @@ export default function PrzPlanning() {
         fetchAll<Use>((f, t) => supabase.from('prz_use').select('prz_product_id,crop_id,dose_min,dose_max,dose_unit,phi_days,max_applications').not('crop_id', 'is', null).order('prz_use_id').range(f, t)),
         fetchAll<Assign>((f, t) => supabase.from('planting_prz').select('planting_prz_id,planting_id,prz_product_id,stage,dose_per_da,dose_unit,area_da').order('planting_prz_id').range(f, t)),
       ])
+      const pc = await loadPrices(season?.[0]?.season_id, 'prz')
+      setPrices(pc.map); setPricesOk(pc.ok); setSeasonLabel(season?.[0]?.label ?? '')
       setPlantings(pl); setProducts(pr); setPnames(nm); setUses(us); setAssigns(as)
     } catch (e) {
       setError((e as Error).message)
@@ -445,6 +452,38 @@ export default function PrzPlanning() {
       (prodById.get(a.id)?.trade_name ?? '').localeCompare(prodById.get(b.id)?.trade_name ?? '', 'bg'))
   }, [view, assigns, prodById])
 
+  // ── стойност ──
+  const assignCost = (a: Assign): number | null => costPrz(qtyOf(a), familyOf(a.dose_unit) === 'vol' ? 'l' : 'kg', prices.get(a.prz_product_id))
+  const costBy = useMemo(() => {
+    const m = new Map<string, { cost: number; missing: number }>()
+    for (const a of assigns) {
+      const c = assignCost(a); const cur = m.get(a.planting_id) ?? { cost: 0, missing: 0 }
+      if (c == null) cur.missing += 1; else cur.cost += c
+      m.set(a.planting_id, cur)
+    }
+    return m
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assigns, prices])
+  const totalCost = useMemo(() => {
+    let cost = 0, missing = 0
+    for (const p of view) { const c = costBy.get(p.planting_id); if (c) { cost += c.cost; missing += c.missing } }
+    return { cost, missing }
+  }, [view, costBy])
+
+  function exportXlsx() {
+    const ids = new Set(view.map((p) => p.planting_id))
+    const rows: (string | number | null)[][] = []
+    for (const a of assigns) {
+      if (!ids.has(a.planting_id)) continue
+      const p = plantingById.get(a.planting_id); if (!p) continue
+      const qty = qtyOf(a); const qu = familyOf(a.dose_unit) === 'vol' ? 'л' : 'кг'
+      const pr = prices.get(a.prz_product_id); const c = assignCost(a)
+      rows.push([p.field_name, p.company_name, p.farm_base_name, p.crop_name, p.planted_area_da, STAGE_LABEL[a.stage], prodById.get(a.prz_product_id)?.trade_name ?? '', a.dose_per_da, UNIT_LABEL[a.dose_unit], a.area_da,
+        Math.round(qty * 1000) / 1000, qu, pr?.supplier ?? null, pr ? pr.price : null, pr ? (pr.unit === 'kg' ? 'евро/кг' : 'евро/л') : null, c == null ? null : Math.round(c * 100) / 100])
+    }
+    downloadXlsx(`ПРЗ_план_${seasonLabel.replace('/', '-')}.xlsx`, 'ПРЗ план', ['БЗС', 'Фирма', 'Стопанска база', 'Култура', 'Засята площ, дка', 'Етап', 'Продукт', 'Доза', 'Единица на дозата', 'Третирана площ, дка', 'Количество', 'Мярка', 'Доставчик', 'Цена', 'Единица на цената', 'Стойност, евро'], rows)
+  }
+
   const pickerItems = [...[
     { key: 'company', label: 'Фирма' },
     { key: 'base', label: 'Стопанска база' },
@@ -452,7 +491,7 @@ export default function PrzPlanning() {
     { key: 'area', label: 'Площ, дка' },
     { key: 'potential', label: 'Потенциал' },
     { key: 'tillage', label: 'Почвообработка' }
-  ], ...STAGES.map((s) => ({ key: s.key, label: s.short }))]
+  ], ...STAGES.map((s) => ({ key: s.key, label: s.short })), ...(pricesOk ? [{ key: 'cost', label: 'Стойност, евро' }, { key: 'costda', label: 'евро/дка' }] : [])]
   const COLS = 2 + pickerItems.filter((i) => vis(i.key)).length
 
   // ───────────────────────── изглед ─────────────────────────
@@ -460,7 +499,7 @@ export default function PrzPlanning() {
     <>
       <div className="page-head">
         <h1>Планиране на ПРЗ</h1>
-        <span className="muted">{loading ? 'Зареждане…' : `${view.length} от ${plantings.length} БЗС · ${fmtArea(totals.area)} дка`}</span>
+        <span className="muted">{loading ? 'Зареждане…' : `${view.length} от ${plantings.length} БЗС · ${fmtArea(totals.area)} дка${pricesOk && totalCost.cost > 0 ? ` · стойност ${fmtEuro(totalCost.cost)} евро${totalCost.missing > 0 ? ` (без ${totalCost.missing} реда без цена)` : ''}` : ''}`}</span>
       </div>
 
       {error && <div className="banner err" role="alert">Грешка: {error}</div>}
@@ -471,6 +510,7 @@ export default function PrzPlanning() {
           <input className="input" type="search" value={q} onChange={(e) => setQ(e.target.value)} />
         </label>
         <button className="btn outline" onClick={clearFilters} disabled={activeFilters === 0}>Изчисти филтрите{activeFilters ? ` (${activeFilters})` : ''}</button>
+        <button className="btn outline" onClick={exportXlsx} disabled={assigns.length === 0}>Експорт в Excel{pricesOk ? ' (с разходи)' : ''}</button>
       </div>
 
       {sel.size > 0 && (
@@ -486,7 +526,7 @@ export default function PrzPlanning() {
       )}
 
       <div className="card">
-        <table className="grid" style={{ minWidth: 1700 }}>
+        <table className="grid" style={{ minWidth: pricesOk ? 1950 : 1700 }}>
           <thead>
             <tr>
               <th style={{ width: 36 }}><input type="checkbox" aria-label="Избери всички показани" checked={allShownSelected} onChange={toggleAll} /></th>
@@ -498,6 +538,8 @@ export default function PrzPlanning() {
               {vis('potential') && (<th><button onClick={() => toggleSort('potential')}>Потенциал {arrow('potential')}</button></th>)}
               {vis('tillage') && (<th><button onClick={() => toggleSort('tillage')}>Почвообработка {arrow('tillage')}</button></th>)}
               {STAGES.filter((s) => vis(s.key)).map((s) => <th key={s.key}>{s.short}</th>)}
+              {pricesOk && vis('cost') && <th className="num">Стойност, евро</th>}
+              {pricesOk && vis('costda') && <th className="num">евро/дка</th>}
             </tr>
             <tr className="filter-row">
               <th />
@@ -527,6 +569,8 @@ export default function PrzPlanning() {
                     options={opts[s.key].map((o) => ({ value: o.id, label: o.name }))} />
                 </th>
               ))}
+              {pricesOk && vis('cost') && <th />}
+              {pricesOk && vis('costda') && <th />}
             </tr>
           </thead>
           <tbody>
@@ -560,6 +604,17 @@ export default function PrzPlanning() {
                       </td>
                     )
                   })}
+                  {pricesOk && (() => {
+                    const c = costBy.get(p.planting_id)
+                    const area = p.planted_area_da ?? 0
+                    const partial = !!c && c.missing > 0
+                    return (
+                      <>
+                        {vis('cost') && <td className="num">{c ? (c.cost > 0 || !partial ? fmtEuro(c.cost) : '—') : <span className="empty">—</span>}{partial && <> <span className="chip warn" title={`${c?.missing} назначени продукта нямат цена в офертите`}>непълна</span></>}</td>}
+                        {vis('costda') && <td className="num">{c && area > 0 && (c.cost > 0 || !partial) ? fmtEuro(c.cost / area) : <span className="empty">—</span>}{partial && c && c.cost > 0 ? '+' : ''}</td>}
+                      </>
+                    )
+                  })()}
                 </tr>
               )
             })}
@@ -572,7 +627,7 @@ export default function PrzPlanning() {
         <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Потребност за показаните БЗС ({summary.length} реда)</summary>
         {summary.length === 0 ? <p className="muted">Още няма назначени продукти за показаните БЗС.</p> : (
           <table className="grid narrow" style={{ marginTop: 12 }}>
-            <thead><tr><th>Етап</th><th>Продукт</th><th className="num">БЗС</th><th className="num">Площ, дка</th><th className="num">Количество</th></tr></thead>
+            <thead><tr><th>Етап</th><th>Продукт</th><th className="num">БЗС</th><th className="num">Площ, дка</th><th className="num">Количество</th>{pricesOk && <><th>Цена</th><th className="num">Стойност, евро</th></>}</tr></thead>
             <tbody>
               {summary.map((s, i) => (
                 <Fragment key={i}>
@@ -582,6 +637,15 @@ export default function PrzPlanning() {
                     <td className="num">{s.n}</td>
                     <td className="num">{fmtArea(s.area)}</td>
                     <td className="num">{fmtArea(s.qty)} {s.fam === 'vol' ? 'л' : 'кг'}</td>
+                    {pricesOk && (() => {
+                      const pr = prices.get(s.id); const c = costPrz(s.qty, s.fam === 'vol' ? 'l' : 'kg', pr)
+                      return (
+                        <>
+                          <td>{pr ? <>{priceText(pr)} <span className="muted">· {pr.supplier}</span></> : <span className="chip warn">няма цена</span>}</td>
+                          <td className="num">{c == null ? (pr ? <span className="chip warn" title="Цената е в друга мерна единица от количеството">единица?</span> : '—') : fmtEuro(c)}</td>
+                        </>
+                      )
+                    })()}
                   </tr>
                 </Fragment>
               ))}
@@ -669,6 +733,13 @@ export default function PrzPlanning() {
                   <div>
                     <div>Общо за {preview.count} БЗС: <strong>{fmtArea(preview.qty)} {preview.qtyUnit}</strong> на {fmtArea(preview.area)} дка
                       {preview.skipped > 0 ? ` · ${preview.skipped} без засета площ ще се пропуснат` : ''}</div>
+                    {pricesOk && chosenProduct && (() => {
+                      const pr = prices.get(chosenProduct.prz_product_id)
+                      const c = costPrz(preview.qty, preview.qtyUnit === 'л' ? 'l' : 'kg', pr)
+                      if (!pr) return <div className="muted" style={{ marginTop: 6 }}>Стойност: няма цена за този продукт – добави оферта в „Растителна защита → Оферти“.</div>
+                      if (c == null) return <div className="muted" style={{ marginTop: 6 }}>Цената е в друга мерна единица ({priceText(pr)}) от количеството – стойността не може да се изчисли.</div>
+                      return <div style={{ marginTop: 6 }}>Стойност: <strong>≈ {fmtEuro(c)} евро</strong> <span className="muted">({priceText(pr)}{pr.supplier ? ` · ${pr.supplier}` : ''}) · {fmtEuro(c / (preview.area || 1))} евро/дка</span></div>
+                    })()}
                     {preview.unreg > 0 && <div className="chip warn" style={{ marginTop: 6 }}>Не е разрешен за {preview.unreg} от избраните БЗС (култура извън регистъра)</div>}
                     {preview.over > 0 && <div className="chip warn" style={{ marginTop: 6 }}>Дозата е над разрешената за {preview.over} БЗС</div>}
                     {preview.overwrite > 0 && <div className="muted" style={{ marginTop: 6 }}>За {preview.overwrite} БЗС този продукт вече е в етапа и дозата ще се презапише.</div>}

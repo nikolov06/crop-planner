@@ -7,26 +7,35 @@ import Nomenclatures from './pages/Nomenclatures'
 import SeedPlanning from './pages/SeedPlanning'
 import PrzPlanning from './pages/PrzPlanning'
 import FertPlanning from './pages/FertPlanning'
+import Offers from './pages/Offers'
+import Recap from './pages/Recap'
 
-type PageKey = 'rotation' | 'seeds' | 'fert' | 'prz' | 'nomenclatures'
+type PageKey = 'rotation' | 'seeds' | 'fert' | 'fert-offers' | 'fert-recap' | 'prz' | 'prz-offers' | 'prz-recap' | 'nomenclatures'
 
-const NAV: { key: PageKey; label: string; sepBefore?: boolean }[] = [
+type NavItem = { key: PageKey; label: string }
+type NavEntry = { sepBefore?: boolean } & ({ key: PageKey; label: string } | { group: string; label: string; children: NavItem[] })
+
+// Менюто е на две нива: модул → екрани (Планиране, Оферти, Рекапитулация)
+const NAV: NavEntry[] = [
   { key: 'rotation', label: 'Сеитбооборот' },
   { key: 'seeds', label: 'Планиране семена' },
-  { key: 'fert', label: 'Планиране торове' },
-  { key: 'prz', label: 'Продукти за растителна защита' },
+  { group: 'fert', label: 'Торове', children: [{ key: 'fert', label: 'Планиране' }, { key: 'fert-offers', label: 'Оферти' }, { key: 'fert-recap', label: 'Рекапитулация' }] },
+  { group: 'prz', label: 'Растителна защита', children: [{ key: 'prz', label: 'Планиране' }, { key: 'prz-offers', label: 'Оферти' }, { key: 'prz-recap', label: 'Рекапитулация' }] },
   { key: 'nomenclatures', label: 'Номенклатури', sepBefore: true },
 ]
 
+const PAGES: PageKey[] = NAV.flatMap((n) => ('children' in n ? n.children.map((c) => c.key) : [n.key]))
+
 function pageFromHash(): PageKey {
   const k = window.location.hash.replace('#/', '') as PageKey
-  return NAV.some((n) => n.key === k) ? k : 'rotation'
+  return PAGES.includes(k) ? k : 'rotation'
 }
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [ready, setReady] = useState(false)
   const [page, setPage] = useState<PageKey>(pageFromHash())
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -68,18 +77,49 @@ export default function App() {
     <div className="shell">
       <nav className="sidebar" aria-label="Основна навигация">
         <div className="brand">Crop Planner</div>
-        {NAV.map((n) => (
-          <div key={n.key} style={{ display: 'contents' }}>
-            {n.sepBefore && <div className="nav-sep" />}
-            <button
-              className="nav-item"
-              aria-current={page === n.key ? 'page' : undefined}
-              onClick={() => go(n.key)}
-            >
-              {n.label}
-            </button>
-          </div>
-        ))}
+        {NAV.map((n) => {
+          if ('children' in n) {
+            const active = n.children.some((c) => c.key === page)
+            const open = openGroups[n.group] ?? active
+            return (
+              <div key={n.group} style={{ display: 'contents' }}>
+                {n.sepBefore && <div className="nav-sep" />}
+                <button
+                  className="nav-item nav-group"
+                  aria-expanded={open}
+                  data-active={active ? 'true' : undefined}
+                  onClick={() => setOpenGroups((g) => ({ ...g, [n.group]: !open }))}
+                >
+                  <span>{n.label}</span>
+                  <span className="nav-caret" aria-hidden="true">{open ? '▾' : '▸'}</span>
+                </button>
+                {open &&
+                  n.children.map((c) => (
+                    <button
+                      key={c.key}
+                      className="nav-item nav-sub"
+                      aria-current={page === c.key ? 'page' : undefined}
+                      onClick={() => go(c.key)}
+                    >
+                      {c.label}
+                    </button>
+                  ))}
+              </div>
+            )
+          }
+          return (
+            <div key={n.key} style={{ display: 'contents' }}>
+              {n.sepBefore && <div className="nav-sep" />}
+              <button
+                className="nav-item"
+                aria-current={page === n.key ? 'page' : undefined}
+                onClick={() => go(n.key)}
+              >
+                {n.label}
+              </button>
+            </div>
+          )
+        })}
         <div className="nav-spacer" />
         <div className="nav-user">{session.user.email}</div>
         <button className="nav-item" onClick={() => supabase.auth.signOut()}>
@@ -91,6 +131,10 @@ export default function App() {
         {page === 'seeds' && <SeedPlanning />}
         {page === 'fert' && <FertPlanning />}
         {page === 'prz' && <PrzPlanning />}
+        {page === 'fert-offers' && <Offers module="fert" />}
+        {page === 'prz-offers' && <Offers module="prz" />}
+        {page === 'fert-recap' && <Recap module="fert" />}
+        {page === 'prz-recap' && <Recap module="prz" />}
         {page === 'nomenclatures' && <Nomenclatures />}
       </main>
     </div>

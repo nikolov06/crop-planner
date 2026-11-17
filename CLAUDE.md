@@ -40,6 +40,10 @@ Crop Planner е уеб приложение за планиране на зем�
 - `20261108115000_planting_seed_origin.sql`
 - `20261108120000_v_rotation_list.sql`
 - `20261109120000_variety_seeds_per_pack.sql`
+- `20261114180000_prz_catalog_and_fertilizer_ext.sql`
+- `20261116120000_planting_prz.sql`
+- `20261116130000_planting_tillage2.sql`
+- `20261117120000_product_prices.sql`
 
 Чака `supabase/pending/20261029121200_postgis.sql`. PostGIS миграцията се преглежда и прилага отделно, само след изрично съгласие на собственика на проекта. Не изпълнявай `supabase db push` без такова съгласие.
 
