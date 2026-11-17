@@ -46,6 +46,7 @@ Crop Planner е уеб приложение за планиране на зем�
 - `20261117120000_product_prices.sql`
 - `20261118120000_postgis.sql` (разширение PostGIS в схема `extensions`)
 - `20261118130000_work_field_geom.sql` (`work_field.geom`, `jd_field_id`, `geom_updated_at`; махнати `field.geom` и `field_crop_year.isak_geom`)
+- `20261118140000_map_views.sql` (изгледи `v_work_field_geojson`, `v_work_field_season`; функция `set_work_field_geom`)
 
 Типът за геометрия е `extensions.geometry`.
 
