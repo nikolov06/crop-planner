@@ -11,3 +11,4 @@ dist/
 import_*.sql
 env.local.txt
 *.xlsx
+geom/
