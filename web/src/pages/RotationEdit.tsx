@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { WorkFieldPicker, emptyOf, moveBzs, otherCompanies, permMsg, useWorkFields } from '../lib/workfields'
 
 // Редакция, добавяне и изтриване на БЗС от екрана „Сеитбооборот“.
 // Работи върху текущия сезон (основна култура) и – по избор – върху предходните четири.
@@ -99,6 +100,9 @@ export function FieldEditModal({ fieldId, fieldName, onClose, onDone, onDelete }
   const [seeds, setSeeds] = useState<Record<string, number>>({}) // planting_id -> брой сортове
   const [fcyCur, setFcyCur] = useState<string | null>(null)
   const [f, setF] = useState({ name: '', isak: '', company: '', potential: '', crop: '', area: '', t1: '', t2: '' })
+  const wf = useWorkFields()
+  const [wfOrig, setWfOrig] = useState<string | null>(null)
+  const [wfNew, setWfNew] = useState<string | null>(null)
 
   useEffect(() => {
     if (!d) return
@@ -106,7 +110,7 @@ export function FieldEditModal({ fieldId, fieldName, onClose, onDone, onDelete }
     ;(async () => {
       try {
         const ye = d.season.year_end
-        const fl = await supabase.from('field').select('organization_id').eq('field_id', fieldId).limit(1)
+        const fl = await supabase.from('field').select('organization_id,work_field_id').eq('field_id', fieldId).limit(1)
         if (fl.error) throw new Error(fl.error.message)
         const ctx = await supabase.from('v_planting_context')
           .select('planting_id,fcy_id,season_year_end,crop_id,planted_area_da,tillage_id,company_id,potential_id,field_name,isak_number,is_locked')
@@ -133,7 +137,9 @@ export function FieldEditModal({ fieldId, fieldName, onClose, onDone, onDelete }
           if (x) { fcy = x.fcy_id; curRow = x }
         }
         if (off) return
-        setOrg(((fl.data ?? [])[0] as { organization_id: string } | undefined)?.organization_id ?? null)
+        const fr = (fl.data ?? [])[0] as { organization_id: string; work_field_id: string | null } | undefined
+        setOrg(fr?.organization_id ?? null)
+        setWfOrig(fr?.work_field_id ?? null); setWfNew(fr?.work_field_id ?? null)
         setPls(map); setT2(t2m); setSeeds(sm); setFcyCur(fcy)
         const cp = map[ye]
         setF({
@@ -153,6 +159,11 @@ export function FieldEditModal({ fieldId, fieldName, onClose, onDone, onDelete }
   const cropChanged = !!cur && f.crop !== cur.crop_id
   const seedsAffected = cropChanged ? seeds[cur.planting_id] ?? 0 : 0
   const problem = tillageProblem(f.t1, f.t2)
+  const wfMoving = !!wfNew && wfNew !== wfOrig
+  const wfTarget = wfNew && wf.wfs ? wf.wfs.find((w) => w.work_field_id === wfNew) ?? null : null
+  const wfOld = wfOrig && wf.wfs ? wf.wfs.find((w) => w.work_field_id === wfOrig) ?? null : null
+  const myCompany = d?.companies.find((c) => c.id === f.company)?.label ?? null
+  const wfOthers = wfMoving ? otherCompanies(wfTarget, [myCompany]) : []
 
   async function removeSeeds(plantingId: string) {
     const r = await supabase.from('planting_seed').delete().eq('planting_id', plantingId)
@@ -214,9 +225,16 @@ export function FieldEditModal({ fieldId, fieldName, onClose, onDone, onDelete }
         if (r.error) throw new Error(msg(r.error))
         steps.push('нова култура за сезона')
       }
-      onDone(steps.length ? `БЗС „${f.name.trim()}“: записано (${steps.join(', ')}).` : 'Няма промени за записване.')
+      // 3. обработваемо поле (преместване на БЗС)
+      let emptied = ''
+      if (wfMoving && wfNew) {
+        await moveBzs([fieldId], wfNew)
+        steps.push(`обработваемо поле → ${wfTarget?.name ?? ''}`)
+        if (wfOrig && (await emptyOf([wfOrig])).length) emptied = ` Обработваемото поле „${wfOld?.name ?? ''}“ остана празно – можеш да го изтриеш от „Геометрии“ → „Празни обработваеми полета“.`
+      }
+      onDone(steps.length ? `БЗС „${f.name.trim()}“: записано (${steps.join(', ')}).${emptied}` : 'Няма промени за записване.')
     } catch (e) {
-      setError(`${(e as Error).message}${steps.length ? ` (вече записано: ${steps.join(', ')})` : ''}`)
+      setError(`${permMsg((e as Error).message)}${steps.length ? ` (вече записано: ${steps.join(', ')})` : ''}`)
       setBusy(false)
     }
   }
@@ -241,6 +259,18 @@ export function FieldEditModal({ fieldId, fieldName, onClose, onDone, onDelete }
               <Sel label="Почвообработка" value={f.t1} onChange={(v) => setF({ ...f, t1: v, t2: v ? f.t2 : '' })} opts={d.tillages} />
               {d.t2Ok && <Sel label="Втора обработка (по избор)" value={f.t2} onChange={(v) => setF({ ...f, t2: v })} opts={d.tillages} disabled={!f.t1} />}
             </div>
+            <div className="filters" style={{ alignItems: 'flex-start' }}>
+              {wf.wfs
+                ? <WorkFieldPicker wfs={wf.wfs} value={wfNew} onChange={setWfNew} />
+                : <span className="muted">{wf.err ? `Обработваемите полета не се заредиха: ${wf.err}` : 'Зареждане на обработваемите полета…'}</span>}
+              {wfMoving && (
+                <div className="muted" style={{ flex: '1 1 240px', alignSelf: 'center' }}>
+                  БЗС ще се премести от „{wfOld?.name ?? '—'}“ в „{wfTarget?.name}“ ({wfTarget?.nBzs ?? 0} БЗС, {wfTarget?.hasGeom ? 'с граница' : 'без граница'}).
+                  {wfOld && wfOld.nBzs <= 1 && <> „{wfOld.name}“ ще остане празно.</>}
+                </div>
+              )}
+            </div>
+            {wfOthers.length > 0 && <div className="banner">За сведение: в „{wfTarget?.name}“ има БЗС и от друга фирма ({wfOthers.join(', ')}). Това е допустимо.</div>}
             {!cur && <div className="banner">За този сезон полето още няма култура. Ако зададеш култура и площ, ще се създаде запис.</div>}
             {cur?.is_locked && <div className="banner err">Периодът е заключен – записът ще бъде отказан.</div>}
             {seedsAffected > 0 && <div className="banner err">Смяна на културата ще премахне {seedsAffected} ред(а) със сортове за този сезон (сортът е на старата култура). Ще трябва да ги зададеш наново в „Планиране семена“.</div>}
@@ -427,6 +457,8 @@ export function BulkModal({ fieldIds, onClose, onDone }: { fieldIds: string[]; o
   const [ok, setOk] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const wf = useWorkFields()
+  const [wfNew, setWfNew] = useState<string | null>(null)
 
   useEffect(() => {
     if (!d) return
@@ -466,11 +498,34 @@ export function BulkModal({ fieldIds, onClose, onDone }: { fieldIds: string[]; o
     return { a, b }
   }
   const bad = pls ? pls.filter((p) => { const { a, b } = fin(p); return b != null && (a == null || a === b) }).length : 0
-  const nothing = !crop && !t1 && !t2
+  const plantingChange = !!(crop || t1 || t2)
+  const nothing = !plantingChange && !wfNew
+  // преместване към обработваемо поле: засяга всички избрани БЗС (и тези без култура за сезона)
+  const sel = useMemo(() => new Set(fieldIds), [fieldIds])
+  const selBzs = wf.bzs ? wf.bzs.filter((b) => sel.has(b.field_id)) : []
+  const wfTarget = wfNew && wf.wfs ? wf.wfs.find((w) => w.work_field_id === wfNew) ?? null : null
+  const toMove = selBzs.filter((b) => b.work_field_id !== wfNew)
+  const sources = wf.wfs ? wf.wfs.filter((w) => toMove.some((b) => b.work_field_id === w.work_field_id)) : []
+  const willEmpty = sources.filter((w) => w.nBzs === toMove.filter((b) => b.work_field_id === w.work_field_id).length)
+  const wfOthers = wfNew ? otherCompanies(wfTarget, selBzs.map((b) => b.company_name)) : []
 
   async function apply() {
     if (!pls || !d) return
     setBusy(true); setError(null)
+    let moved = ''
+    if (wfNew && toMove.length) {
+      try {
+        await moveBzs(toMove.map((b) => b.field_id), wfNew)
+        const emptied = await emptyOf(sources.map((w) => w.work_field_id))
+        const names = sources.filter((w) => emptied.includes(w.work_field_id)).map((w) => `„${w.name}“`)
+        moved = `Преместени ${toMove.length} БЗС в „${wfTarget?.name ?? ''}“.${names.length ? ` Останаха празни: ${names.join(', ')} – изтрий ги от „Геометрии“ → „Празни обработваеми полета“.` : ''}`
+      } catch (e) {
+        setError(`Преместването не е направено (върнато е към предишното състояние): ${permMsg((e as Error).message)}`)
+        setBusy(false)
+        return
+      }
+    }
+    if (!plantingChange) { onDone(moved || 'Няма промени за записване.'); return }
     const ids = pls.map((p) => p.planting_id)
     const patch: Record<string, unknown> = {}
     if (crop) patch.crop_id = crop
@@ -494,9 +549,9 @@ export function BulkModal({ fieldIds, onClose, onDone }: { fieldIds: string[]; o
         done += r.data?.length ?? 0
       }
       if (done < ids.length) throw new Error(`Записани са само ${done} от ${ids.length} – вероятно липсват права или периодът е заключен за част от БЗС.`)
-      onDone(`Променени ${done} БЗС (${[crop ? 'култура' : '', t1 || t2 ? 'почвообработка' : ''].filter(Boolean).join(' и ')}).`)
+      onDone(`Променени ${done} БЗС (${[crop ? 'култура' : '', t1 || t2 ? 'почвообработка' : ''].filter(Boolean).join(' и ')}).${moved ? ' ' + moved : ''}`)
     } catch (e) {
-      setError(`${(e as Error).message}${done ? ` (вече записани: ${done})` : ''}`)
+      setError(`${(e as Error).message}${done ? ` (вече записани: ${done})` : ''}${moved ? ` · ${moved}` : ''}`)
       setBusy(false)
     }
   }
@@ -511,13 +566,25 @@ export function BulkModal({ fieldIds, onClose, onDone }: { fieldIds: string[]; o
         {(err || error) && <div className="banner err" role="alert">{err ?? error}</div>}
         {!d || !pls ? (!err && !error && <span className="muted">Зареждане…</span>) : (
           <>
-            <span className="muted">Променя само основната култура на текущия сезон. Полетата, оставени на „без промяна“, не се пипат.</span>
+            <span className="muted">Културата и почвообработката се сменят само за основната култура на текущия сезон. Преместването в обработваемо поле засяга всички избрани БЗС. Полетата, оставени на „без промяна“, не се пипат.</span>
             <div className="filters" style={{ alignItems: 'flex-start' }}>
               <Sel label="Култура" value={crop} onChange={setCrop} opts={d.crops} empty="— без промяна —" />
               <Sel label="Почвообработка" value={t1} onChange={setT1} opts={[{ id: CLEAR, label: '— изчисти —' }, ...d.tillages]} empty="— без промяна —" />
               {d.t2Ok && <Sel label="Втора обработка" value={t2} onChange={setT2} opts={[{ id: CLEAR, label: '— изчисти —' }, ...d.tillages]} empty="— без промяна —" />}
             </div>
-            {skipped > 0 && <div className="banner">{skipped} от избраните БЗС нямат основна култура за този сезон и ще бъдат пропуснати.</div>}
+            <div className="filters" style={{ alignItems: 'flex-start' }}>
+              {wf.wfs
+                ? <WorkFieldPicker wfs={wf.wfs} value={wfNew} onChange={setWfNew} label="Премести в обработваемо поле" placeholder="— без промяна —" />
+                : <span className="muted">{wf.err ? `Обработваемите полета не се заредиха: ${wf.err}` : 'Зареждане на обработваемите полета…'}</span>}
+            </div>
+            {wfNew && (
+              <div className="banner ok">
+                Ще се преместят {toMove.length} от {fieldIds.length} БЗС в „{wfTarget?.name}“ ({wfTarget?.nBzs ?? 0} БЗС, {wfTarget?.hasGeom ? 'с граница' : 'без граница'}).
+                {willEmpty.length > 0 && <> Ще останат празни: {willEmpty.map((w) => `„${w.name}“`).join(', ')}.</>}
+              </div>
+            )}
+            {wfOthers.length > 0 && <div className="banner">За сведение: в „{wfTarget?.name}“ има БЗС и от друга фирма ({wfOthers.join(', ')}). Това е допустимо.</div>}
+            {skipped > 0 && plantingChange && <div className="banner">{skipped} от избраните БЗС нямат основна култура за този сезон и ще бъдат пропуснати при смяната на култура/почвообработка.</div>}
             {bad > 0 && <div className="banner err" role="alert">За {bad} БЗС резултатът е невалиден: втората обработка изисква първа и не може да е равна на нея.</div>}
             {seedsLost > 0 && (
               <>
@@ -526,7 +593,9 @@ export function BulkModal({ fieldIds, onClose, onDone }: { fieldIds: string[]; o
               </>
             )}
             <div style={{ display: 'flex', gap: 10 }}>
-              <button className="btn" onClick={apply} disabled={busy || nothing || bad > 0 || pls.length === 0 || (seedsLost > 0 && !ok)}>{busy ? 'Записване…' : `Приложи за ${pls.length} БЗС`}</button>
+              <button className="btn" onClick={apply} disabled={busy || nothing || (plantingChange && (bad > 0 || pls.length === 0)) || (seedsLost > 0 && !ok) || (!!wfNew && !wf.bzs)}>
+                {busy ? 'Записване…' : plantingChange ? `Приложи за ${pls.length} БЗС` : `Премести ${toMove.length} БЗС`}
+              </button>
               <button className="btn outline" onClick={onClose} disabled={busy}>Отказ</button>
             </div>
           </>

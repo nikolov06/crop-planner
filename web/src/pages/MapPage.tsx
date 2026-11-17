@@ -25,6 +25,7 @@ export default function MapPage() {
   const [seasons, setSeasons] = useState<Season[]>([])
   const [seasonId, setSeasonId] = useState<number | null>(null)
   const [geo, setGeo] = useState<GeoRow[]>([])
+  const [emptyGeo, setEmptyGeo] = useState(0)
   const [srows, setSrows] = useState<SeasonRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -49,12 +50,19 @@ export default function MapPage() {
         const s = await supabase.from('season').select('season_id,label,is_current').order('year_end', { ascending: false })
         if (s.error) throw new Error(s.error.message)
         const list = (s.data ?? []) as Season[]
-        const g = await fetchPaged<GeoRow>((f, t) => supabase.from('v_work_field_geojson')
-          .select('work_field_id,name,name_bg,jd_field_id,geojson,polygon_area_da').order('name').order('work_field_id').range(f, t))
+        const [g, fl] = await Promise.all([
+          fetchPaged<GeoRow>((f, t) => supabase.from('v_work_field_geojson')
+            .select('work_field_id,name,name_bg,jd_field_id,geojson,polygon_area_da').order('name').order('work_field_id').range(f, t)),
+          // кои обработваеми полета имат поне едно БЗС (във всички сезони)
+          fetchPaged<{ work_field_id: string | null }>((f, t) => supabase.from('field').select('work_field_id').order('field_id').range(f, t)),
+        ])
         if (off) return
+        const used = new Set(fl.map((x) => x.work_field_id).filter(Boolean) as string[])
         setSeasons(list)
         setSeasonId((c) => c ?? list.find((x) => x.is_current)?.season_id ?? list[0]?.season_id ?? null)
-        setGeo(g)
+        // празните (без БЗС) не се показват и не се броят като свързани полета
+        setGeo(g.filter((x) => used.has(x.work_field_id)))
+        setEmptyGeo(g.filter((x) => !used.has(x.work_field_id)).length)
       } catch (e) {
         if (!off) { fail(e); setLoading(false) }
       }
@@ -179,6 +187,7 @@ export default function MapPage() {
           {loading ? 'Зареждане…' : `сезон ${seasonLabel} · показани ${view.length} от ${feats.length} полета с граница · ${fmtArea(totalArea)} дка`}
           {!loading && nMismatch > 0 && ` · ${nMismatch} с разлика в площта над 10%`}
           {!loading && withoutGeom > 0 && ` · ${withoutGeom} полета от сезона без граница`}
+          {!loading && emptyGeo > 0 && <> · {emptyGeo} празни обработваеми полета с граница не се показват (<a href="#/geometries">Геометрии</a>)</>}
         </span>
       </div>
       {error && <div className="banner err" role="alert">{error}</div>}

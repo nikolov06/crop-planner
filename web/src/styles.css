@@ -230,3 +230,13 @@ table.grid { min-width: 1500px; }
 @media (max-width: 1100px) {
   .geo-grid { grid-template-columns: 1fr; }
 }
+
+/* Обработваеми полета: избор, преместване, празни */
+.wf-hit { all: unset; box-sizing: border-box; display: flex; justify-content: space-between; gap: 12px; width: 100%; padding: 6px 4px; cursor: pointer; font-size: 14px; border-radius: var(--radius-sm); }
+.wf-hit:hover, .wf-hit:focus-visible { background: var(--surface-subtle); }
+.wf-hit .muted { font-size: 12px; white-space: nowrap; }
+.pick-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 180px; overflow: auto; }
+.pick-list li { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; font-size: 13px; padding: 4px 8px; background: var(--surface-subtle); border-radius: var(--radius-sm); }
+.btn.outline.danger { color: #a12b2b; border-color: #a12b2b; }
+.btn.outline.danger:disabled { color: var(--ink-muted); border-color: var(--border-input); }
+.swatch.dashed.red { border-color: #f87171; }
