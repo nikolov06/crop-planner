@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase, configured } from './lib/supabase'
 import Login from './Login'
@@ -9,8 +9,11 @@ import PrzPlanning from './pages/PrzPlanning'
 import FertPlanning from './pages/FertPlanning'
 import Offers from './pages/Offers'
 import Recap from './pages/Recap'
+// Картите (Leaflet, shpjs) се зареждат отделно, само при отваряне.
+const MapPage = lazy(() => import('./pages/MapPage'))
+const Geometries = lazy(() => import('./pages/Geometries'))
 
-type PageKey = 'rotation' | 'seeds' | 'fert' | 'fert-offers' | 'fert-recap' | 'prz' | 'prz-offers' | 'prz-recap' | 'nomenclatures'
+type PageKey = 'rotation' | 'seeds' | 'fert' | 'fert-offers' | 'fert-recap' | 'prz' | 'prz-offers' | 'prz-recap' | 'map' | 'geometries' | 'nomenclatures'
 
 type NavItem = { key: PageKey; label: string }
 type NavEntry = { sepBefore?: boolean } & ({ key: PageKey; label: string } | { group: string; label: string; children: NavItem[] })
@@ -21,13 +24,15 @@ const NAV: NavEntry[] = [
   { key: 'seeds', label: 'Планиране семена' },
   { group: 'fert', label: 'Торове', children: [{ key: 'fert', label: 'Планиране' }, { key: 'fert-offers', label: 'Оферти' }, { key: 'fert-recap', label: 'Рекапитулация' }] },
   { group: 'prz', label: 'Растителна защита', children: [{ key: 'prz', label: 'Планиране' }, { key: 'prz-offers', label: 'Оферти' }, { key: 'prz-recap', label: 'Рекапитулация' }] },
+  { group: 'map', label: 'Карта', children: [{ key: 'map', label: 'Карта' }, { key: 'geometries', label: 'Геометрии' }] },
   { key: 'nomenclatures', label: 'Номенклатури', sepBefore: true },
 ]
 
 const PAGES: PageKey[] = NAV.flatMap((n) => ('children' in n ? n.children.map((c) => c.key) : [n.key]))
 
 function pageFromHash(): PageKey {
-  const k = window.location.hash.replace('#/', '') as PageKey
+  // #/rotation?q=… — след „?“ са параметри на страницата (напр. търсене), не част от ключа
+  const k = window.location.hash.replace('#/', '').split('?')[0] as PageKey
   return PAGES.includes(k) ? k : 'rotation'
 }
 
@@ -135,6 +140,11 @@ export default function App() {
         {page === 'prz-offers' && <Offers module="prz" />}
         {page === 'fert-recap' && <Recap module="fert" />}
         {page === 'prz-recap' && <Recap module="prz" />}
+        {(page === 'map' || page === 'geometries') && (
+          <Suspense fallback={<span className="muted">Зареждане на картата…</span>}>
+            {page === 'map' ? <MapPage /> : <Geometries />}
+          </Suspense>
+        )}
         {page === 'nomenclatures' && <Nomenclatures />}
       </main>
     </div>

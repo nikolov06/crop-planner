@@ -95,7 +95,8 @@ export default function Rotation() {
   const [rows, setRows] = useState<Row[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [q, setQ] = useState('')
+  // търсене от адреса (#/rotation?q=…), напр. от „Отвори в Сеитбооборот“ в картата
+  const [q, setQ] = useState(() => new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('q') ?? '')
   const [sel, setSel] = useState<Record<string, string>>({})          // текст/избор по колона
   const [rng, setRng] = useState<Record<string, { min: string; max: string }>>({})  // площ, норма
   const [sort, setSort] = useState<{ key: ColKey; dir: 1 | -1 }>({ key: 'field_name', dir: 1 })
