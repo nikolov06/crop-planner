@@ -44,8 +44,9 @@ Crop Planner е уеб приложение за планиране на зем�
 - `20261116120000_planting_prz.sql`
 - `20261116130000_planting_tillage2.sql`
 - `20261117120000_product_prices.sql`
+- `20261118120000_postgis.sql` (PostGIS; колони `field.geom` и `field_crop_year.isak_geom`, засега празни)
 
-Чака `supabase/pending/20261029121200_postgis.sql`. PostGIS миграцията се преглежда и прилага отделно, само след изрично съгласие на собственика на проекта. Не изпълнявай `supabase db push` без такова съгласие.
+Не изпълнявай `supabase db push` без изрично съгласие на собственика на проекта.
 
 ## Локална разработка
 
