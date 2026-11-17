@@ -7,14 +7,15 @@ import {
   MISSING_MSG, areaDa, closestName, createMap, escapeHtml, fetchPaged, looksWgs84, missingViews, normName, to2D,
   type GeoRow, type SeasonRow,
 } from '../lib/geo'
-import { countBzs, emptyOf, loadWorkFields, moveBzs, type Bzs, type WFStat } from '../lib/workfields'
+import { useConfirm } from '../lib/confirm'
+import { WorkFieldPicker, countBzs, emptyOf, loadWorkFields, moveBzs, otherCompanies, type Bzs, type WFStat } from '../lib/workfields'
 
 // Геометрии: качване на SHP (.zip) от JD Operations Center, автоматично мачване по име,
 // ръчно свързване, ново обработваемо поле от полигон + преместване на БЗС, изтриване на празни полета.
 type WF = WFStat & { bzsArea: number | null }
 type Poly = { idx: number; name: string; jdId: string | null; geom: GeoJSON.Geometry; area: number; matchId: string | null; linked: boolean }
 type Tab = 'unmatched' | 'nogeom' | 'empty'
-type Mode = 'existing' | 'new'
+type Mode = 'existing' | 'new' | 'move'
 
 const C_UNMATCHED = '#f97316'
 const C_MATCHED = '#22c55e'
@@ -51,6 +52,8 @@ export default function Geometries() {
   const [tab, setTab] = useState<Tab>('unmatched')
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [mode, setMode] = useState<Mode>('existing')
+  const [moveSrc, setMoveSrc] = useState<string | null>(null)
+  const [moveDst, setMoveDst] = useState<string | null>(null)
   const [targetId, setTargetId] = useState<string | null>(null)
   const [tq, setTq] = useState('')
   const [newName, setNewName] = useState('')
@@ -65,6 +68,7 @@ export default function Geometries() {
   const exLayer = useRef<L.GeoJSON | null>(null)
   const fileLayer = useRef<L.GeoJSON | null>(null)
   const fitted = useRef(false)
+  const [ask, confirmNode] = useConfirm()
 
   // обработваеми полета с броя БЗС, съществуващи граници и площ на БЗС за текущия сезон
   useEffect(() => {
@@ -180,7 +184,7 @@ export default function Geometries() {
   async function connect() {
     const target = targetId ? wfById.get(targetId) : null
     if (!target || selPolys.length === 0) return
-    if (target.hasGeom && !window.confirm(`„${target.name}“ вече има граница. Да бъде ли презаписана с ${selPolys.length} избран${selPolys.length === 1 ? '' : 'и'} полигон${selPolys.length === 1 ? '' : 'а'}?`)) return
+    if (target.hasGeom && !await ask(`„${target.name}“ вече има граница. Да бъде ли презаписана с ${selPolys.length} избран${selPolys.length === 1 ? '' : 'и'} полигон${selPolys.length === 1 ? '' : 'а'}?`, { ok: 'Презапиши' })) return
     setBusy(true); setFlash(null)
     try {
       await saveGeom(target.work_field_id, selPolys)
@@ -212,7 +216,7 @@ export default function Geometries() {
     if (!name || selPolys.length === 0 || chosenBzs.length === 0 || nameClash) return
     const orgs = Array.from(new Set(chosenBzs.map((b) => b.organization_id)))
     if (orgs.length !== 1) { setFlash({ text: 'Избраните БЗС са от различни организации – не може да се съберат в едно обработваемо поле.', err: true }); return }
-    if (!window.confirm(`Ново обработваемо поле „${name}“ с ${selPolys.length} полигон${selPolys.length === 1 ? '' : 'а'} (${fmtArea(selArea)} дка) и ${chosenBzs.length} БЗС?${willEmpty.length ? `\n\nЩе останат празни: ${willEmpty.map((w) => w.name).join(', ')}.` : ''}`)) return
+    if (!await ask(`Ново обработваемо поле „${name}“ с ${selPolys.length} полигон${selPolys.length === 1 ? '' : 'а'} (${fmtArea(selArea)} дка) и ${chosenBzs.length} БЗС?${willEmpty.length ? `\n\nЩе останат празни: ${willEmpty.map((w) => w.name).join(', ')}.` : ''}`, { ok: 'Създай' })) return
     setBusy(true); setFlash(null)
     let newId: string | null = null
     let stage = 'създаване на обработваемото поле'
@@ -253,7 +257,7 @@ export default function Geometries() {
 
   async function saveAuto() {
     const n = autoNew.size
-    if (n === 0 || !window.confirm(`Да се запишат границите на ${n} автоматично свързани полета, които още нямат граница?`)) return
+    if (n === 0 || !await ask(`Да се запишат границите на ${n} автоматично свързани полета, които още нямат граница?`)) return
     setBusy(true); setFlash(null)
     let ok = 0
     const done: number[] = []
@@ -273,7 +277,7 @@ export default function Geometries() {
 
   async function deleteEmpty(w: WF) {
     setFlash(null)
-    if (!window.confirm(`Изтриване на обработваемо поле „${w.name}“${w.hasGeom ? ' (има граница – тя също ще се изтрие)' : ' (без граница)'}.\n\nТова не може да се върне.`)) return
+    if (!await ask(`Изтриване на обработваемо поле „${w.name}“${w.hasGeom ? ' (има граница – тя също ще се изтрие)' : ' (без граница)'}.\n\nТова не може да се върне.`, { ok: 'Изтрий', danger: true })) return
     setBusy(true)
     try {
       const n = await countBzs(w.work_field_id)
@@ -285,6 +289,36 @@ export default function Geometries() {
       setReload((k) => k + 1)
     } catch (e) {
       setFlash({ text: rpcError((e as Error).message), err: true })
+    }
+    setBusy(false)
+  }
+
+  // преместване на всички БЗС от едно обработваемо поле в друго
+  const moveSrcWf = moveSrc ? wfById.get(moveSrc) ?? null : null
+  const moveDstWf = moveDst ? wfById.get(moveDst) ?? null : null
+  const moveSrcBzs = moveSrc ? bzs.filter((b) => b.work_field_id === moveSrc) : []
+  const moveOthers = moveDstWf ? otherCompanies(moveDstWf, moveSrcBzs.map((b) => b.company_name)) : []
+  function startMove(id: string) {
+    setMode('move'); setMoveSrc(id); setMoveDst(null); setFlash(null)
+    const src = wfById.get(id)
+    // предложение: поле с граница и най-близко име (напр. „Djurata 1 i 2 n“ → „Djurata 1 i 2“)
+    if (src) {
+      const b = closestName(src.name, wfs.filter((w) => w.work_field_id !== id && w.hasGeom), (w) => w.name)
+      if (b && b.score >= 0.6) setMoveDst(b.item.work_field_id)
+    }
+  }
+  async function doMove() {
+    if (!moveSrcWf || !moveDstWf || moveSrcBzs.length === 0) return
+    if (!await ask(`Премести ${moveSrcBzs.length} БЗС от „${moveSrcWf.name}“ в „${moveDstWf.name}“?\n\n„${moveSrcWf.name}“ ще остане празно.`, { ok: 'Премести' })) return
+    setBusy(true); setFlash(null)
+    try {
+      await moveBzs(moveSrcBzs.map((b) => b.field_id), moveDstWf.work_field_id)
+      const emptied = await emptyOf([moveSrcWf.work_field_id])
+      setFlash({ text: `Преместени ${moveSrcBzs.length} БЗС от „${moveSrcWf.name}“ в „${moveDstWf.name}“.${emptied.length ? ` „${moveSrcWf.name}“ остана празно – можеш да го изтриеш от таба „Празни обработваеми полета“.` : ''}`, err: false })
+      if (emptied.length) setTab('empty')
+      setMoveSrc(null); setMoveDst(null); setReload((k) => k + 1)
+    } catch (e) {
+      setFlash({ text: `Преместването не е направено (върнато е към предишното състояние): ${rpcError((e as Error).message)}`, err: true })
     }
     setBusy(false)
   }
@@ -458,13 +492,14 @@ export default function Geometries() {
                 ? <p className="empty" style={{ padding: 12 }}>Всички обработваеми полета с БЗС имат граница.</p>
                 : (
                   <table className="grid">
-                    <thead><tr><th>Обработваемо поле</th><th className="num">БЗС</th><th className="num">дка по БЗС</th></tr></thead>
+                    <thead><tr><th>Обработваемо поле</th><th className="num">БЗС</th><th className="num">дка по БЗС</th><th /></tr></thead>
                     <tbody>
                       {noGeom.map((w) => (
                         <tr key={w.work_field_id} className={targetId === w.work_field_id ? 'sel' : undefined}>
                           <td><button className="linkish" onClick={() => { setMode('existing'); setTargetId(w.work_field_id); setTq(w.name) }}>{w.name}</button>{w.name_bg && <span className="muted"> · {w.name_bg}</span>}</td>
                           <td className="num">{w.nBzs}</td>
                           <td className="num">{w.bzsArea != null ? fmtArea(w.bzsArea) : '—'}</td>
+                          <td style={{ textAlign: 'right' }}><button className={moveSrc === w.work_field_id && mode === 'move' ? 'btn' : 'btn outline'} onClick={() => startMove(w.work_field_id)}>Премести БЗС…</button></td>
                         </tr>
                       ))}
                     </tbody>
@@ -494,9 +529,11 @@ export default function Geometries() {
           </div>
 
           <div className="geo-connect">
+            {flash && <div className={flash.err ? 'banner err' : 'banner ok'} role={flash.err ? 'alert' : 'status'}>{flash.text}</div>}
             <div className="seg" role="group" aria-label="Действие с избраните полигони">
               <button className={mode === 'existing' ? 'btn' : 'btn outline'} aria-pressed={mode === 'existing'} onClick={() => setMode('existing')}>Свържи със съществуващо</button>
               <button className={mode === 'new' ? 'btn' : 'btn outline'} aria-pressed={mode === 'new'} onClick={() => setMode('new')}>Ново обработваемо поле</button>
+              <button className={mode === 'move' ? 'btn' : 'btn outline'} aria-pressed={mode === 'move'} onClick={() => setMode('move')}>Премести БЗС в друго поле</button>
             </div>
             <div className="muted">
               Избрани полигони: {selPolys.length}{selPolys.length > 0 && ` · ${fmtArea(selArea)} дка`}
@@ -528,6 +565,41 @@ export default function Geometries() {
                   </div>
                 )}
                 <button className="btn" disabled={busy || !target || selPolys.length === 0} onClick={connect}>{busy ? 'Записване…' : 'Свържи'}</button>
+                {!busy && (selPolys.length === 0 || !target) && (
+                  <span className="muted" style={{ fontSize: 13 }}>
+                    {polys.length === 0
+                      ? 'Първо качи .zip със SHP (горе), после избери полигон от списъка или на картата.'
+                      : selPolys.length === 0 ? 'Избери поне един полигон – от списъка „Полигони без поле“ или с клик на картата.' : 'Избери обработваемо поле.'}
+                  </span>
+                )}
+              </>
+            )}
+
+            {mode === 'move' && (
+              <>
+                <span className="muted" style={{ fontSize: 13 }}>Всички БЗС от едно обработваемо поле отиват в друго (напр. в поле, което вече има граница). Без качване на файл.</span>
+                <WorkFieldPicker wfs={wfs} value={moveSrc} onChange={setMoveSrc} label="От обработваемо поле" />
+                {moveSrcWf && (
+                  <ul className="pick-list">
+                    {moveSrcBzs.map((b) => (
+                      <li key={b.field_id}><span><strong>{b.field_name ?? '—'}</strong>{b.isak_number ? ` · ${b.isak_number}` : ''}{b.company_name && <span className="muted"> · {b.company_name}</span>}</span></li>
+                    ))}
+                    {moveSrcBzs.length === 0 && <li><span className="muted">Полето няма БЗС.</span></li>}
+                  </ul>
+                )}
+                <WorkFieldPicker wfs={wfs} value={moveDst} onChange={setMoveDst} label="В обработваемо поле" exclude={moveSrc} />
+                {moveDstWf && (
+                  <div className="muted">
+                    {moveDstWf.hasGeom ? <span className="chip ok">с граница</span> : <span className="chip warn">без граница</span>} {moveDstWf.nBzs} БЗС
+                    {moveDstWf.bzsArea != null && <> · {fmtArea(moveDstWf.bzsArea)} дка по БЗС</>}
+                    {moveDstWf.hasGeom && existing.find((g) => g.work_field_id === moveDstWf.work_field_id) && <> · полигон {fmtArea(Number(existing.find((g) => g.work_field_id === moveDstWf.work_field_id)?.polygon_area_da))} дка</>}
+                  </div>
+                )}
+                {moveOthers.length > 0 && <div className="muted">За сведение: в „{moveDstWf?.name}“ има БЗС и от друга фирма ({moveOthers.join(', ')}). Това е допустимо.</div>}
+                {moveSrcWf && moveDstWf && moveSrcBzs.length > 0 && <div className="banner">„{moveSrcWf.name}“ ще остане празно и ще можеш да го изтриеш от таба „Празни обработваеми полета“.</div>}
+                <button className="btn" disabled={busy || !moveSrcWf || !moveDstWf || moveSrcBzs.length === 0} onClick={doMove}>
+                  {busy ? 'Записване…' : `Премести ${moveSrcBzs.length} БЗС`}
+                </button>
               </>
             )}
 
@@ -593,6 +665,7 @@ export default function Geometries() {
           </div>
         </div>
       </div>
+      {confirmNode}
     </>
   )
 }

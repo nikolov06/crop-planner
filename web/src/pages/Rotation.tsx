@@ -425,6 +425,7 @@ export default function Rotation() {
           </tbody>
         </table>
       </div>
+      {ie.confirmNode}
     </>
   )
 }

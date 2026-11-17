@@ -240,3 +240,8 @@ table.grid { min-width: 1500px; }
 .btn.outline.danger { color: #a12b2b; border-color: #a12b2b; }
 .btn.outline.danger:disabled { color: var(--ink-muted); border-color: var(--border-input); }
 .swatch.dashed.red { border-color: #f87171; }
+/* потвърждението трябва да е над картата (Leaflet ползва z-index до ~1000) */
+.confirm-backdrop { z-index: 3000; align-items: center; }
+.btn.danger-solid { background: #a12b2b; border-color: #a12b2b; color: #fff; }
+/* неактивен бутон да личи като неактивен */
+.btn:disabled, .btn[aria-disabled='true'] { opacity: 0.45; cursor: not-allowed; }

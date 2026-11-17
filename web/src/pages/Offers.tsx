@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { useConfirm } from '../lib/confirm'
 import { downloadXlsx } from '../lib/xlsx'
 import { MultiFilter, anyToken } from '../lib/multifilter'
 
@@ -443,6 +444,7 @@ function OfferModal({ module, seasonId, offer, sups, prods, lines, pid, onClose,
 
 // ───────── доставчици ─────────
 function SuppliersModal({ sups, onClose, onChanged }: { sups: Sup[]; onClose: () => void; onChanged: () => void }) {
+  const [ask, confirmNode] = useConfirm()
   const [list, setList] = useState<Sup[]>(sups)
   const [name, setName] = useState('')
   const [eik, setEik] = useState('')
@@ -473,7 +475,7 @@ function SuppliersModal({ sups, onClose, onChanged }: { sups: Sup[]; onClose: ()
     setList((l) => l.map((x) => (x.supplier_id === s.supplier_id ? { ...x, ...p } : x))); onChanged()
   }
   async function remove(s: Sup) {
-    if (!window.confirm(`Изтриване на доставчик „${s.name}“?`)) return
+    if (!await ask(`Изтриване на доставчик „${s.name}“?`, { ok: 'Изтрий', danger: true })) return
     setError(null)
     const r = await supabase.from('supplier').delete().eq('supplier_id', s.supplier_id).select('supplier_id')
     if (r.error) return setError(/foreign key|violates/i.test(r.error.message) ? `„${s.name}“ има оферти и не може да се изтрие. Маркирай го като неактивен.` : r.error.message)
@@ -511,6 +513,7 @@ function SuppliersModal({ sups, onClose, onChanged }: { sups: Sup[]; onClose: ()
           </table>
         </div>
       </div>
+      {confirmNode}
     </div>
   )
 }

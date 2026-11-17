@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useConfirm } from '../lib/confirm'
 import { supabase } from '../lib/supabase'
 
 // Редакция по колони директно в таблицата „Сеитбооборот“ (след отключване на колоната).
@@ -24,6 +25,7 @@ const prevKey = (k: number) => (['crop', 'crop_prev1', 'crop_prev2', 'crop_prev3
 
 export function useInlineEdit(enabled: boolean, patch: (fieldId: string, p: RowPatch) => void, report: (m: string | null, isErr: boolean) => void) {
   const [ready, setReady] = useState(false)
+  const [ask, confirmNode] = useConfirm()
   const [loadErr, setLoadErr] = useState<string | null>(null)
   const [crops, setCrops] = useState<Opt[]>([])
   const [tills, setTills] = useState<Opt[]>([])
@@ -116,7 +118,7 @@ export function useInlineEdit(enabled: boolean, patch: (fieldId: string, p: RowP
     const cnt = await supabase.from('planting_seed').select('planting_id', { count: 'exact', head: true }).eq('planting_id', p.planting_id)
     const n = cnt.count ?? 0
     if (n > 0) {
-      if (!window.confirm(`Смяната на културата изтрива ${n} ред(а) със сортове за този сезон на „${r.field_name}“. Продължаваш ли?`)) return
+      if (!await ask(`Смяната на културата изтрива ${n} ред(а) със сортове за този сезон на „${r.field_name}“. Продължаваш ли?`, { ok: 'Смени културата', danger: true })) return
       const d = await supabase.from('planting_seed').delete().eq('planting_id', p.planting_id)
       if (d.error) return report(d.error.message, true)
     }
@@ -144,7 +146,7 @@ export function useInlineEdit(enabled: boolean, patch: (fieldId: string, p: RowP
   }
 
   return {
-    ready, loadErr, crops, tills, t2Ok, plOf, setName, setArea, setCrop, setTillage,
+    ready, loadErr, crops, tills, t2Ok, plOf, setName, setArea, setCrop, setTillage, confirmNode,
   }
 }
 export type InlineApi = ReturnType<typeof useInlineEdit>
