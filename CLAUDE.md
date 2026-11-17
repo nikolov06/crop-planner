@@ -44,7 +44,10 @@ Crop Planner е уеб приложение за планиране на зем�
 - `20261116120000_planting_prz.sql`
 - `20261116130000_planting_tillage2.sql`
 - `20261117120000_product_prices.sql`
-- `20261118120000_postgis.sql` (PostGIS; колони `field.geom` и `field_crop_year.isak_geom`, засега празни)
+- `20261118120000_postgis.sql` (разширение PostGIS в схема `extensions`)
+- `20261118130000_work_field_geom.sql` (`work_field.geom`, `jd_field_id`, `geom_updated_at`; махнати `field.geom` и `field_crop_year.isak_geom`)
+
+Типът за геометрия е `extensions.geometry`.
 
 Не изпълнявай `supabase db push` без изрично съгласие на собственика на проекта.
 
