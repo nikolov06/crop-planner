@@ -245,3 +245,24 @@ table.grid { min-width: 1500px; }
 .btn.danger-solid { background: #a12b2b; border-color: #a12b2b; color: #fff; }
 /* неактивен бутон да личи като неактивен */
 .btn:disabled, .btn[aria-disabled='true'] { opacity: 0.45; cursor: not-allowed; }
+
+/* Рекапитулация (сеитбооборот) */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.tile { display: grid; gap: 2px; }
+.tile-n { font-size: 22px; line-height: 30px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.recap-two { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; align-items: start; }
+@media (max-width: 1100px) { .recap-two { grid-template-columns: minmax(0, 1fr); } }
+table.grid td.cell-calc, table.grid th.cell-calc { background: var(--surface-chip); }
+table.grid td.cell-warn { background: var(--warn-bg); color: var(--warn-ink); font-weight: 600; }
+table.grid tr.grp-row td { background: var(--surface-subtle); font-weight: 600; color: var(--ink-muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+table.grid tr.sum-row td { font-weight: 600; border-top: 1px solid var(--border); }
+table.grid tr.sum-row.strong td { background: var(--surface-subtle); }
+table.grid tr.picked td { background: var(--ok-bg); }
+table.grid th.th-group { text-align: center; border-bottom: 1px solid var(--border-soft); }
+.chip.tag { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.chip.info { background: var(--info-bg); color: var(--info-ink); }
+.link-btn { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-align: left; text-decoration: underline; text-underline-offset: 2px; }
+.link-btn.on { font-weight: 600; text-decoration: none; }
+.bar { height: 10px; background: var(--border-soft); border-radius: 99px; overflow: hidden; min-width: 80px; }
+.bar > div { height: 100%; border-radius: 99px; }
+.banner svg { vertical-align: -1px; }

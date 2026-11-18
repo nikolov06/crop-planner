@@ -49,6 +49,7 @@ Crop Planner е уеб приложение за планиране на зем�
 - `20261118140000_map_views.sql` (изгледи `v_work_field_geojson`, `v_work_field_season`; функция `set_work_field_geom`)
 - `20261118150000_bzs_legal_area.sql` (`field_crop_year.legal_area_dka`, `buffer_strip_dka` – преименувана от `buffer_area_da`, `area_wo_buffer_dka` GENERATED; `v_rotation_list` с площите; функция `set_bzs_legal_areas`)
 - `20261118160000_company_name_cyrillic.sql` (латински букви в имената на фирмите → кирилица)
+- `20261118170000_recap_eco_schemes.sql` (`company.in_holding`; номенклатури `recap_crop_group` и `eco_scheme_rule` с RLS като `crop`/`season`; изгледи `v_recap_company_crop`, `v_recap_base_crop`)
 
 Типът за геометрия е `extensions.geometry`.
 
@@ -58,6 +59,8 @@ Crop Planner е уеб приложение за планиране на зем�
 
 Не изпълнявай `supabase db push` без изрично съгласие на собственика на проекта.
 
+Рекапитулацията (Сеитбооборот → Рекапитулация) смята ДЗЕС/ЕКОРОК в `web/src/lib/recap.ts`; тестовете са в `recap.test.ts` (`npm test` от `web/`). Старите `diversification_rule` / `v_diversification` не се ползват от екрана.
+
 ## Локална разработка
 
 От директория `web/`:
@@ -66,6 +69,7 @@ Crop Planner е уеб приложение за планиране на зем�
 npm run dev
 npm run typecheck
 npm run build
+npm test
 ```
 
 ## Деплой

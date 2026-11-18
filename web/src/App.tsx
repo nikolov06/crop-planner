@@ -9,18 +9,19 @@ import PrzPlanning from './pages/PrzPlanning'
 import FertPlanning from './pages/FertPlanning'
 import Offers from './pages/Offers'
 import Recap from './pages/Recap'
+import RotationRecap from './pages/RotationRecap'
 // Картите (Leaflet, shpjs) се зареждат отделно, само при отваряне.
 const MapPage = lazy(() => import('./pages/MapPage'))
 const Geometries = lazy(() => import('./pages/Geometries'))
 
-type PageKey = 'rotation' | 'seeds' | 'fert' | 'fert-offers' | 'fert-recap' | 'prz' | 'prz-offers' | 'prz-recap' | 'map' | 'geometries' | 'nomenclatures'
+type PageKey = 'rotation' | 'rotation-recap' | 'seeds' | 'fert' | 'fert-offers' | 'fert-recap' | 'prz' | 'prz-offers' | 'prz-recap' | 'map' | 'geometries' | 'nomenclatures'
 
 type NavItem = { key: PageKey; label: string }
 type NavEntry = { sepBefore?: boolean } & ({ key: PageKey; label: string } | { group: string; label: string; children: NavItem[] })
 
 // Менюто е на две нива: модул → екрани (Планиране, Оферти, Рекапитулация)
 const NAV: NavEntry[] = [
-  { key: 'rotation', label: 'Сеитбооборот' },
+  { group: 'rotation', label: 'Сеитбооборот', children: [{ key: 'rotation', label: 'Списък' }, { key: 'rotation-recap', label: 'Рекапитулация' }] },
   { key: 'seeds', label: 'Планиране семена' },
   { group: 'fert', label: 'Торове', children: [{ key: 'fert', label: 'Планиране' }, { key: 'fert-offers', label: 'Оферти' }, { key: 'fert-recap', label: 'Рекапитулация' }] },
   { group: 'prz', label: 'Растителна защита', children: [{ key: 'prz', label: 'Планиране' }, { key: 'prz-offers', label: 'Оферти' }, { key: 'prz-recap', label: 'Рекапитулация' }] },
@@ -133,6 +134,7 @@ export default function App() {
       </nav>
       <main className="content">
         {page === 'rotation' && <Rotation />}
+        {page === 'rotation-recap' && <RotationRecap />}
         {page === 'seeds' && <SeedPlanning />}
         {page === 'fert' && <FertPlanning />}
         {page === 'prz' && <PrzPlanning />}

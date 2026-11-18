@@ -102,8 +102,21 @@ function zipStore(files: Entry[]): Uint8Array {
   return out
 }
 
+export type Sheet = { name: string; headers: string[]; rows: Cell[][] }
+
 export function buildXlsx(sheetName: string, headers: string[], rows: Cell[][]): Uint8Array {
-  const name = xmlEscape(sheetName.replace(/[[\]:*?/\\]/g, ' ').slice(0, 31) || 'Данни')
+  return buildXlsxBook([{ name: sheetName, headers, rows }])
+}
+
+// Работна книга с няколко листа (имената са уникални, до 31 знака).
+export function buildXlsxBook(sheets: Sheet[]): Uint8Array {
+  const used = new Set<string>()
+  const names = sheets.map((sh, i) => {
+    let n = sh.name.replace(/[[\]:*?/\\]/g, ' ').slice(0, 31).trim() || `Лист ${i + 1}`
+    for (let k = 2; used.has(n); k++) n = `${n.slice(0, 27)} (${k})`
+    used.add(n)
+    return xmlEscape(n)
+  })
   const files: Entry[] = [
     {
       name: '[Content_Types].xml',
@@ -111,7 +124,7 @@ export function buildXlsx(sheetName: string, headers: string[], rows: Cell[][]):
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
           '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>' +
           '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
-          '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+          sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('') +
           '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>',
       ),
     },
@@ -126,15 +139,15 @@ export function buildXlsx(sheetName: string, headers: string[], rows: Cell[][]):
       name: 'xl/workbook.xml',
       data: enc.encode(
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
-          `<sheets><sheet name="${name}" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+          `<sheets>${names.map((n, i) => `<sheet name="${n}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>`,
       ),
     },
     {
       name: 'xl/_rels/workbook.xml.rels',
       data: enc.encode(
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
-          '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
-          '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
+          sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('') +
+          `<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
       ),
     },
     {
@@ -149,13 +162,20 @@ export function buildXlsx(sheetName: string, headers: string[], rows: Cell[][]):
           '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>',
       ),
     },
-    { name: 'xl/worksheets/sheet1.xml', data: enc.encode(sheetXml(headers, rows)) },
+    ...sheets.map((sh, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, data: enc.encode(sheetXml(sh.headers, sh.rows)) })),
   ]
   return zipStore(files)
 }
 
+export function downloadXlsxBook(fileName: string, sheets: Sheet[]): void {
+  saveBytes(fileName, buildXlsxBook(sheets))
+}
+
 export function downloadXlsx(fileName: string, sheetName: string, headers: string[], rows: Cell[][]): void {
-  const bytes = buildXlsx(sheetName, headers, rows)
+  saveBytes(fileName, buildXlsx(sheetName, headers, rows))
+}
+
+function saveBytes(fileName: string, bytes: Uint8Array): void {
   const blob = new Blob([bytes as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
