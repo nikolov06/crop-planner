@@ -264,3 +264,24 @@ table.grid th.th-group { text-align: center; border-bottom: 1px solid var(--bord
 .bar { height: 10px; background: var(--border-soft); border-radius: 99px; overflow: hidden; min-width: 80px; }
 .bar > div { height: 100%; border-radius: 99px; }
 .banner svg { vertical-align: -1px; }
+
+/* Сеитбооборот → Списък: колоните са колкото съдържанието; излишното място отива в последната колона. */
+table.grid.rot { table-layout: auto; width: max-content; min-width: 100%; }
+table.grid.rot th, table.grid.rot td { white-space: nowrap; }
+/* „Свиване до съдържанието“ за всички колони без последната (действия), която поема остатъка */
+table.grid.rot th:not(:last-child), table.grid.rot td:not(:last-child) { width: 1px; }
+table.grid.rot td.act { text-align: right; }
+/* Филтрите заемат ширината на колоната си, но не я разпъват */
+table.grid.rot tr.filter-row th > .input.fi { contain: inline-size; width: 100%; min-width: 64px; }
+/* Наименование: до ~320px, после многоточие (пълното име е в title) */
+table.grid.rot .name { max-width: 340px; }
+table.grid.rot .name-text { display: inline-block; max-width: 320px; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+/* Sticky вляво: чекбокс + Наименование */
+table.grid.rot { --chk-w: 36px; }
+table.grid.rot th:first-child, table.grid.rot td:first-child { width: var(--chk-w); min-width: var(--chk-w); max-width: var(--chk-w); padding-left: 10px; padding-right: 0; }
+table.grid.rot th:nth-child(2), table.grid.rot td:nth-child(2) { position: sticky; left: var(--chk-w); z-index: 2; background: var(--surface-card); box-shadow: inset -1px 0 0 var(--border-soft); }
+table.grid.rot thead th:nth-child(2) { z-index: 3; }
+table.grid.rot tr.filter-row th:nth-child(2) { background: var(--surface-subtle); }
+table.grid.rot tr.row:hover td:nth-child(2) { background: var(--surface-subtle); }
+table.grid.rot tr.open td:nth-child(2) { background: #f1f5f2; }
+table.grid.rot tr.detail td:first-child { position: static; width: auto; min-width: 0; max-width: none; padding: 16px 12px 16px 44px; white-space: normal; }

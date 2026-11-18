@@ -42,7 +42,7 @@ type Row = {
   area_wo_buffer_dka: number | null
 }
 
-type ColKey = 'field_name' | 'company' | 'base' | 'area' | 'legal' | 'buffer' | 'wobuf' | 'crop' | 'p1' | 'p2' | 'p3' | 'p4' | 'potential' | 'tillage' | 'variety' | 'repro' | 'rate' | 'rate2'
+type ColKey = 'field_name' | 'company' | 'base' | 'settlement' | 'area' | 'legal' | 'buffer' | 'wobuf' | 'crop' | 'p1' | 'p2' | 'p3' | 'p4' | 'potential' | 'tillage' | 'variety' | 'repro' | 'rate' | 'rate2'
 type Kind = 'text' | 'select' | 'num' // num: без филтър, само сортиране
 type Col = { key: ColKey; kind: Kind }
 
@@ -51,7 +51,7 @@ const EMPTY = '__empty'
 const POT_RANK: Record<string, number> = { 'лоша': 1, 'средна': 2, 'добра': 3, 'много добра': 4 }
 
 const COLS: Col[] = [
-  { key: 'field_name', kind: 'text' }, { key: 'company', kind: 'select' }, { key: 'base', kind: 'select' },
+  { key: 'field_name', kind: 'text' }, { key: 'company', kind: 'select' }, { key: 'base', kind: 'select' }, { key: 'settlement', kind: 'select' },
   { key: 'area', kind: 'num' },
   { key: 'legal', kind: 'num' }, { key: 'buffer', kind: 'num' }, { key: 'wobuf', kind: 'num' },
   { key: 'crop', kind: 'select' },
@@ -67,6 +67,7 @@ function textVal(r: Row, k: ColKey): string {
     case 'field_name': return r.field_name ?? ''
     case 'company': return r.company_name ?? ''
     case 'base': return r.farm_base_name ?? ''
+    case 'settlement': return r.settlement_name ?? ''
     case 'crop': return r.crop ?? ''
     case 'p1': return r.crop_prev1 ?? ''
     case 'p2': return r.crop_prev2 ?? ''
@@ -196,7 +197,11 @@ export default function Rotation() {
     for (const c of COLS) {
       if (c.kind !== 'select') continue
       const set = new Set<string>()
-      for (const r of rows) {
+      // землищата: само от избраните стопански бази (ако има избрани)
+      const src = c.key === 'settlement' && sel.base
+        ? rows.filter((r) => anyToken(sel.base, (t) => (t === EMPTY ? !r.farm_base_name : r.farm_base_name === t)))
+        : rows
+      for (const r of src) {
         if (c.key === 'variety' || c.key === 'repro') seedVals(r, c.key).forEach((v) => set.add(v))
         else { const v = textVal(r, c.key); if (v) set.add(v) }
       }
@@ -205,7 +210,7 @@ export default function Rotation() {
       o[c.key] = arr
     }
     return o
-  }, [rows])
+  }, [rows, sel.base])
 
   const activeCount = Object.values(sel).filter(Boolean).length + (q ? 1 : 0)
   const clearAll = () => { setQ(''); setSel({}) }
@@ -214,7 +219,7 @@ export default function Rotation() {
     const needle = q.trim().toLowerCase()
     const list = rows.filter((r) => {
       if (needle) {
-        const hay = [r.field_name, r.code, r.isak_number, r.work_field_name, ...(r.aliases ?? []).map((a) => a.name)].filter(Boolean).join(' ').toLowerCase()
+        const hay = [r.field_name, r.code, r.isak_number, r.work_field_name, r.settlement_name, ...(r.aliases ?? []).map((a) => a.name)].filter(Boolean).join(' ').toLowerCase()
         if (!hay.includes(needle)) return false
       }
       for (const c of COLS) {
@@ -250,7 +255,7 @@ export default function Rotation() {
   const seasonLabel = rows[0]?.season_label
   const prevLabels = [1, 2, 3, 4].map((i) => rows.find((r) => r[`season_prev${i}` as keyof Row])?.[`season_prev${i}` as keyof Row] as string | undefined)
   const label: Record<ColKey, string> = {
-    field_name: 'Наименование', company: 'Фирма', base: 'Стопанска база', area: 'Площ, дка',
+    field_name: 'Наименование', company: 'Фирма', base: 'Стопанска база', settlement: 'Землище', area: 'Площ, дка',
     legal: 'Площ правно осн., дка', buffer: 'Буферна ивица, дка', wobuf: 'Без буферна ивица, дка', crop: `Култура ${seasonLabel ?? ''}`,
     p1: prevLabels[0] ?? '−1', p2: prevLabels[1] ?? '−2', p3: prevLabels[2] ?? '−3', p4: prevLabels[3] ?? '−4',
     potential: 'Потенциал', tillage: 'Почвообработка', variety: 'Сорт / хибрид', repro: 'Размножение', rate: 'Сеитбена норма', rate2: 'кг/дка · сем./ха',
@@ -286,7 +291,7 @@ export default function Rotation() {
 
       <div className="filters">
         <label className="field grow">
-          Търсене (име, БЗС, разширено име)
+          Търсене (име, БЗС, разширено име, землище)
           <input className="input" type="search" value={q} onChange={(e) => setQ(e.target.value)} />
         </label>
         <button className="btn outline" onClick={clearAll} disabled={activeCount === 0}>Изчисти филтрите{activeCount ? ` (${activeCount})` : ''}</button>
@@ -334,10 +339,10 @@ export default function Rotation() {
       {modal?.kind === 'del' && <FieldDeleteModal fieldId={modal.id} fieldName={modal.name} onClose={() => setModal(null)} onDone={done} />}
 
       <div className="card">
-        <table className="grid">
+        <table className="grid rot">
           <thead>
             <tr>
-              <th style={{ width: 34 }}><input type="checkbox" aria-label="Избери всички показани" checked={view.length > 0 && view.every((x) => picked.has(x.field_id))}
+              <th><input type="checkbox" aria-label="Избери всички показани" checked={view.length > 0 && view.every((x) => picked.has(x.field_id))}
                 onChange={() => setPicked((p) => { const n = new Set(p); if (view.length > 0 && view.every((x) => n.has(x.field_id))) view.forEach((x) => n.delete(x.field_id)); else view.forEach((x) => n.add(x.field_id)); return n })} /></th>
               {shownCols.map((c) => (
                 <th key={c.key} className={c.kind === 'num' ? 'num' : ''}>
@@ -348,7 +353,7 @@ export default function Rotation() {
                   )}
                 </th>
               ))}
-              <th aria-label="Действия" style={{ width: 44 }} />
+              <th aria-label="Действия" />
             </tr>
             <tr className="filter-row">
               <th />
@@ -380,11 +385,12 @@ export default function Rotation() {
                     <td>
                       <span className="name">
                         <svg className="chev" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                        {unl('field_name') ? <span onClick={stop}><InlineName ie={ie} r={r} /></span> : r.field_name}
+                        {unl('field_name') ? <span onClick={stop}><InlineName ie={ie} r={r} /></span> : <span className="name-text" title={r.field_name}>{r.field_name}</span>}
                       </span>
                     </td>
                     {vis('company') && (<td>{r.company_name ?? <span className="empty">—</span>}</td>)}
                     {vis('base') && (<td>{r.farm_base_name ?? <span className="empty">—</span>}</td>)}
+                    {vis('settlement') && (<td>{r.settlement_name ?? ''}</td>)}
                     {vis('area') && (<td className="num" onClick={unl('area') ? stop : undefined}>{unl('area') ? <InlineArea ie={ie} r={r} /> : fmtDka(r.area_da)}</td>)}
                     {vis('legal') && (<td className="num" onClick={legalOn ? stop : undefined}>{legalOn ? <LegalInput le={le} r={r} which="legal" /> : (r.legal_area_dka != null ? fmtDka(r.legal_area_dka) : <span className="empty">—</span>)}</td>)}
                     {vis('buffer') && (<td className="num" onClick={legalOn ? stop : undefined}>{legalOn ? <LegalInput le={le} r={r} which="buffer" /> : (r.fcy_id ? fmtDka(r.buffer_strip_dka ?? 0) : <span className="empty">—</span>)}</td>)}
@@ -400,7 +406,7 @@ export default function Rotation() {
                     {vis('repro') && (<td>{s0?.reproduction ?? <span className="empty">—</span>}</td>)}
                     {vis('rate') && (<td className="num">{s0?.rate != null ? fmtRate(s0.rate, s0.rate_basis) : <span className="empty">—</span>}</td>)}
                     {vis('rate2') && (<td className="num" title={s0 && s0.rate_basis !== 'seeds_da' && s0.kg_da == null ? 'Няма партида с мин. данни (МХЗ и кълняемост)' : undefined}>{seedRate2(s0)?.text ?? <span className="empty">—</span>}</td>)}
-                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }} onClick={stop}>
+                    <td className="act" onClick={stop}>
                       <button className="btn outline" style={{ minHeight: 28, padding: '0 7px' }} title="Редакция" aria-label={`Редакция ${r.field_name}`} onClick={() => setModal({ kind: 'edit', id: r.field_id, name: r.field_name })}>✎</button>
                     </td>
                   </tr>
