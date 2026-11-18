@@ -32,3 +32,25 @@ export const cropColor = (crop: string | null | undefined) =>
 // ПШЕНИЦА -> Пшеница
 export const cropLabel = (crop: string | null | undefined) =>
   crop ? crop.charAt(0) + crop.slice(1).toLowerCase() : ''
+
+// Площи в дка с интервал за хилядите винаги (bg-BG не групира 4-цифрени числа): 1 768,5
+const nfDka = new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 })
+export const fmtDka = (v: number | null | undefined) =>
+  v == null ? '' : nfDka.format(v).replace(/,/g, ' ').replace('.', ',')
+
+// Въведен текст → число в дка (до 3 знака). '' → null; невалидно → NaN.
+export function parseDka(s: string | number | null | undefined): number | null {
+  if (s == null) return null
+  if (typeof s === 'number') return Number.isFinite(s) ? Math.round(s * 1000) / 1000 : NaN
+  let t = s.replace(/[\s  ]/g, '')
+  if (t === '') return null
+  if (t.includes(',') && t.includes('.')) {
+    // последният разделител е десетичният, другите са за хилядите
+    const dec = t.lastIndexOf(',') > t.lastIndexOf('.') ? ',' : '.'
+    t = t.split(dec === ',' ? '.' : ',').join('')
+  }
+  t = t.replace(',', '.')
+  if (!/^-?\d*\.?\d+$/.test(t) && !/^-?\d+\.$/.test(t)) return NaN
+  const n = Number(t)
+  return Number.isFinite(n) ? Math.round(n * 1000) / 1000 : NaN
+}

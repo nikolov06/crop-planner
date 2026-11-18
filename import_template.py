@@ -11,7 +11,7 @@
 Пускане (паролата е в .env.local, който е в .gitignore – не я пиши в чата):
   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f import.sql
 
-Изисква: openpyxl (pip install openpyxl). Базата вече има миграциите до 20261031120000_field_code_alias.sql.
+Изисква: openpyxl (pip install openpyxl). Базата вече има миграциите до 20261118150000_bzs_legal_area.sql (буферът е в buffer_strip_dka).
 """
 import argparse, datetime, re, sys
 import openpyxl
@@ -149,7 +149,7 @@ create temp table _fcy as
 select distinct on (r.code, r.ye) r.code, r.ye, r.firm, r.isak, r.isak_da, r.buffer_da, r.potential
   from s_row r order by r.code, r.ye, (r.isak_da is not null) desc, r.area_da desc nulls last, r.rn;
 
-insert into public.field_crop_year (organization_id, field_id, season_id, company_id, field_name, isak_number, isak_area_da, buffer_area_da, potential_id)
+insert into public.field_crop_year (organization_id, field_id, season_id, company_id, field_name, isak_number, isak_area_da, buffer_strip_dka, potential_id)
 select _org.id, fd.field_id, se.season_id,
        (select c.company_id from public.company c where c.organization_id = _org.id and c.name = x.firm),
        f.name,

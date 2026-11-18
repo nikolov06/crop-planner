@@ -1,9 +1,11 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { fmtArea, fmtInt, fmtRate, cropColor, cropLabel } from '../lib/format'
+import { fmtArea, fmtDka, fmtInt, fmtRate, cropColor, cropLabel } from '../lib/format'
+import { downloadXlsx, type Cell } from '../lib/xlsx'
 import { ColumnPicker, useHiddenCols } from '../lib/columns'
 import { MultiFilter, anyToken } from '../lib/multifilter'
 import { BulkModal, FieldAddModal, FieldDeleteModal, FieldEditModal } from './RotationEdit'
+import { LegalBulkModal, LegalImportModal, LegalInput, WOBUF_CELL_STYLE, WoBufferCell, useLegalEdit, type LegalPatch } from './RotationLegal'
 import { INLINE_COLS, InlineArea, InlineCrop, InlineName, InlineTillage, useInlineEdit, type InlineKey, type RowPatch } from './RotationInline'
 
 type SeedRow = { variety: string | null; reproduction: string | null; area_da: number | null; rate: number | null; rate_basis: string | null; origin: string | null; kg_da?: number | null }
@@ -34,9 +36,13 @@ type Row = {
   tillage?: string | null
   seeds: SeedRow[] | null
   aliases: AliasRow[] | null
+  fcy_id: string | null
+  legal_area_dka: number | null
+  buffer_strip_dka: number | null
+  area_wo_buffer_dka: number | null
 }
 
-type ColKey = 'field_name' | 'company' | 'base' | 'area' | 'crop' | 'p1' | 'p2' | 'p3' | 'p4' | 'potential' | 'tillage' | 'variety' | 'repro' | 'rate' | 'rate2'
+type ColKey = 'field_name' | 'company' | 'base' | 'area' | 'legal' | 'buffer' | 'wobuf' | 'crop' | 'p1' | 'p2' | 'p3' | 'p4' | 'potential' | 'tillage' | 'variety' | 'repro' | 'rate' | 'rate2'
 type Kind = 'text' | 'select' | 'num' | 'none'
 type Col = { key: ColKey; kind: Kind; num?: boolean }
 
@@ -46,7 +52,9 @@ const POT_RANK: Record<string, number> = { 'лоша': 1, 'средна': 2, 'д
 
 const COLS: Col[] = [
   { key: 'field_name', kind: 'text' }, { key: 'company', kind: 'select' }, { key: 'base', kind: 'select' },
-  { key: 'area', kind: 'num', num: true }, { key: 'crop', kind: 'select' },
+  { key: 'area', kind: 'num', num: true },
+  { key: 'legal', kind: 'num', num: true }, { key: 'buffer', kind: 'num', num: true }, { key: 'wobuf', kind: 'num', num: true },
+  { key: 'crop', kind: 'select' },
   { key: 'p1', kind: 'select' }, { key: 'p2', kind: 'select' }, { key: 'p3', kind: 'select' }, { key: 'p4', kind: 'select' },
   { key: 'potential', kind: 'select' }, { key: 'tillage', kind: 'select' },
   { key: 'variety', kind: 'select' }, { key: 'repro', kind: 'select' }, { key: 'rate', kind: 'num', num: true },
@@ -78,8 +86,9 @@ function seedRate2(s: SeedRow | undefined): { v: number; text: string } | null {
   if (s.kg_da != null) return { v: s.kg_da, text: `${fmtArea(s.kg_da)} кг/дка` }
   return null
 }
-const numVal = (r: Row, k: 'area' | 'rate' | 'rate2'): number | null =>
-  k === 'area' ? r.area_da : k === 'rate' ? ((r.seeds ?? []).find((s) => s.rate != null)?.rate ?? null) : (seedRate2((r.seeds ?? [])[0])?.v ?? null)
+type NumKey = 'area' | 'legal' | 'buffer' | 'wobuf' | 'rate' | 'rate2'
+const numVal = (r: Row, k: NumKey): number | null =>
+  k === 'area' ? r.area_da : k === 'legal' ? r.legal_area_dka : k === 'buffer' ? (r.fcy_id ? r.buffer_strip_dka : null) : k === 'wobuf' ? r.area_wo_buffer_dka : k === 'rate' ? ((r.seeds ?? []).find((s) => s.rate != null)?.rate ?? null) : (seedRate2((r.seeds ?? [])[0])?.v ?? null)
 
 function CropCell({ crop, main }: { crop: string | null; main?: boolean }) {
   if (!crop) return <span className="empty">—</span>
@@ -111,10 +120,14 @@ export default function Rotation() {
   const [unlocked, setUnlocked] = useState<Set<InlineKey>>(new Set())
   const [lockOpen, setLockOpen] = useState(false)
   const patchRow = (id: string, p: RowPatch) => setRows((rs) => rs.map((x) => (x.field_id === id ? { ...x, ...p } as Row : x)))
-  const ie = useInlineEdit(unlocked.size > 0, patchRow, (m, isErr) => { setFlash(m); setFlashErr(isErr) })
+  const ieOn = Array.from(unlocked).some((k) => k !== 'legal')
+  const ie = useInlineEdit(ieOn, patchRow, (m, isErr) => { setFlash(m); setFlashErr(isErr) })
   const unl = (k: InlineKey) => unlocked.has(k) && ie.ready
+  const le = useLegalEdit((id: string, p: LegalPatch) => setRows((rs) => rs.map((x) => (x.field_id === id ? { ...x, ...p } : x))))
+  const legalOn = unlocked.has('legal')
+  const [legalModal, setLegalModal] = useState<null | 'bulk' | 'import'>(null)
   const stop = (e: { stopPropagation: () => void }) => e.stopPropagation()
-  const done = (m: string) => { setModal(null); setBulkOpen(false); setPicked(new Set()); setFlashErr(false); setFlash(m); setLoading(true); setReloadKey((k) => k + 1) }
+  const done = (m: string) => { setModal(null); setBulkOpen(false); setLegalModal(null); setPicked(new Set()); setFlashErr(false); setFlash(m); setLoading(true); setReloadKey((k) => k + 1) }
 
   useEffect(() => {
     let cancelled = false
@@ -208,7 +221,7 @@ export default function Rotation() {
       for (const c of COLS) {
         if (c.kind === 'num') {
           const f = rng[c.key]; if (!f || (!f.min && !f.max)) continue
-          const v = numVal(r, c.key as 'area' | 'rate' | 'rate2')
+          const v = numVal(r, c.key as NumKey)
           if (v == null) return false
           if (f.min && v < Number(f.min.replace(',', '.'))) return false
           if (f.max && v > Number(f.max.replace(',', '.'))) return false
@@ -229,7 +242,7 @@ export default function Rotation() {
     const { key, dir } = sort
     const col = COLS.find((c) => c.key === key)!
     list.sort((a, b) => {
-      if (col.kind === 'num' || col.kind === 'none') return ((numVal(a, key as 'area' | 'rate' | 'rate2') ?? -1) - (numVal(b, key as 'area' | 'rate' | 'rate2') ?? -1)) * dir
+      if (col.kind === 'num' || col.kind === 'none') return ((numVal(a, key as NumKey) ?? -1) - (numVal(b, key as NumKey) ?? -1)) * dir
       const f = (r: Row) => key === 'variety' || key === 'repro' ? (seedVals(r, key)[0] ?? '') : textVal(r, key)
       if (key === 'potential') return ((POT_RANK[f(a)] ?? 0) - (POT_RANK[f(b)] ?? 0)) * dir
       return f(a).localeCompare(f(b), 'bg') * dir
@@ -238,17 +251,35 @@ export default function Rotation() {
   }, [rows, q, sel, rng, sort])
 
   const total = useMemo(() => view.reduce((s, r) => s + (r.area_da ?? 0), 0), [view])
+  const legalTotal = useMemo(() => view.reduce((s, r) => ({ l: s.l + (r.legal_area_dka ?? 0), b: s.b + (r.fcy_id ? r.buffer_strip_dka ?? 0 : 0), w: s.w + (r.area_wo_buffer_dka ?? 0) }), { l: 0, b: 0, w: 0 }), [view])
   const toggleSort = (key: ColKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: 1 }))
   const arrow = (key: ColKey) => (sort.key === key ? (sort.dir === 1 ? '▲' : '▼') : '')
 
   const seasonLabel = rows[0]?.season_label
   const prevLabels = [1, 2, 3, 4].map((i) => rows.find((r) => r[`season_prev${i}` as keyof Row])?.[`season_prev${i}` as keyof Row] as string | undefined)
   const label: Record<ColKey, string> = {
-    field_name: 'Наименование', company: 'Фирма', base: 'Стопанска база', area: 'Площ, дка', crop: `Култура ${seasonLabel ?? ''}`,
+    field_name: 'Наименование', company: 'Фирма', base: 'Стопанска база', area: 'Площ, дка',
+    legal: 'Площ правно осн., дка', buffer: 'Буферна ивица, дка', wobuf: 'Без буферна ивица, дка', crop: `Култура ${seasonLabel ?? ''}`,
     p1: prevLabels[0] ?? '−1', p2: prevLabels[1] ?? '−2', p3: prevLabels[2] ?? '−3', p4: prevLabels[3] ?? '−4',
     potential: 'Потенциал', tillage: 'Почвообработка', variety: 'Сорт / хибрид', repro: 'Размножение', rate: 'Сеитбена норма', rate2: 'кг/дка · сем./ха',
   }
   const cropKeys: ColKey[] = ['crop', 'p1', 'p2', 'p3', 'p4']
+
+  // Excel: показаните (филтрирани) редове, всички колони, числата като числа
+  function exportXlsx() {
+    const head = ['Наименование', 'Код', 'ИСАК №', 'Фирма', 'Стопанска база', 'Землище', 'Обработваемо поле', label.area,
+      label.legal, label.buffer, label.wobuf, label.crop, label.p1, label.p2, label.p3, label.p4,
+      'Потенциал', 'Почвообработка', 'Сорт / хибрид', 'Размножение', 'Площ на сорта, дка', 'Сеитбена норма', 'кг/дка · сем./ха']
+    const out: Cell[][] = view.map((r) => {
+      const s0 = (r.seeds ?? [])[0]
+      return [r.field_name, r.code, r.isak_number, r.company_name, r.farm_base_name, r.settlement_name, r.work_field_name, r.area_da,
+        r.legal_area_dka, r.fcy_id ? (r.buffer_strip_dka ?? 0) : null, r.area_wo_buffer_dka,
+        cropLabel(r.crop), cropLabel(r.crop_prev1), cropLabel(r.crop_prev2), cropLabel(r.crop_prev3), cropLabel(r.crop_prev4),
+        r.potential ?? null, r.tillage ?? null, (r.seeds ?? []).map((s) => s.variety).filter(Boolean).join(', ') || null,
+        s0?.reproduction ?? null, s0?.area_da ?? null, s0?.rate != null ? fmtRate(s0.rate, s0.rate_basis) : null, seedRate2(s0)?.text ?? null]
+    })
+    downloadXlsx(`Сеитбооборот_${(seasonLabel ?? '').replace('/', '-')}.xlsx`, 'Сеитбооборот', head, out)
+  }
   const shownCols = COLS.filter((c) => c.key === 'field_name' || colPrefs.vis(c.key))
   const vis = (k: ColKey) => colPrefs.vis(k)
 
@@ -256,7 +287,7 @@ export default function Rotation() {
     <>
       <div className="page-head">
         <h1>Сеитбооборот</h1>
-        <span className="muted">{loading ? 'Зареждане…' : `Показани ${view.length} от ${rows.length} полета · ${fmtArea(total)} дка`}</span>
+        <span className="muted">{loading ? 'Зареждане…' : `Показани ${view.length} от ${rows.length} полета · ${fmtArea(total)} дка · правно осн. ${fmtDka(legalTotal.l)} · буфер ${fmtDka(legalTotal.b)} · без буфер ${fmtDka(legalTotal.w)} дка`}</span>
       </div>
 
       {error && <div className="banner err" role="alert">Грешка при зареждане: {error}</div>}
@@ -288,19 +319,24 @@ export default function Rotation() {
             </>
           )}
         </span>
+        <button className="btn outline" onClick={() => setLegalModal('import')}>Импорт площи</button>
+        <button className="btn outline" onClick={exportXlsx} disabled={loading || view.length === 0}>Експорт в Excel</button>
         <button className="btn" onClick={() => setModal({ kind: 'add' })}>+ Ново БЗС</button>
       </div>
-      {unlocked.size > 0 && !ie.ready && !ie.loadErr && <div className="banner">Зареждане на данните за редакция…</div>}
+      {ieOn && !ie.ready && !ie.loadErr && <div className="banner">Зареждане на данните за редакция…</div>}
       {ie.loadErr && <div className="banner err" role="alert">Редакцията не е достъпна: {ie.loadErr}</div>}
       {flash && <div className={flashErr ? 'banner err' : 'banner'} role={flashErr ? 'alert' : 'status'} onClick={() => setFlash(null)}>{flash}</div>}
       {picked.size > 0 && (
         <div className="banner" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <strong>Избрани: {picked.size} БЗС · {fmtArea(rows.filter((x) => picked.has(x.field_id)).reduce((a, x) => a + (x.area_da ?? 0), 0))} дка</strong>
           <button className="btn" onClick={() => setBulkOpen(true)}>Промени култура / почвообработка…</button>
+          <button className="btn" onClick={() => setLegalModal('bulk')}>Задай площ правно осн. / буфер…</button>
           <button className="btn outline" onClick={() => setPicked(new Set())}>Изчисти избора</button>
         </div>
       )}
       {bulkOpen && <BulkModal fieldIds={Array.from(picked)} onClose={() => setBulkOpen(false)} onDone={done} />}
+      {legalModal === 'bulk' && <LegalBulkModal rows={rows.filter((x) => picked.has(x.field_id))} onClose={() => setLegalModal(null)} onDone={done} />}
+      {legalModal === 'import' && <LegalImportModal onClose={() => setLegalModal(null)} onDone={done} />}
       {modal?.kind === 'add' && <FieldAddModal onClose={() => setModal(null)} onDone={done} />}
       {modal?.kind === 'edit' && <FieldEditModal fieldId={modal.id} fieldName={modal.name} onClose={() => setModal(null)} onDone={done} onDelete={() => setModal({ kind: 'del', id: modal.id, name: modal.name })} />}
       {modal?.kind === 'del' && <FieldDeleteModal fieldId={modal.id} fieldName={modal.name} onClose={() => setModal(null)} onDone={done} />}
@@ -364,6 +400,9 @@ export default function Rotation() {
                     {vis('company') && (<td>{r.company_name ?? <span className="empty">—</span>}</td>)}
                     {vis('base') && (<td>{r.farm_base_name ?? <span className="empty">—</span>}</td>)}
                     {vis('area') && (<td className="num" onClick={unl('area') ? stop : undefined}>{unl('area') ? <InlineArea ie={ie} r={r} /> : fmtArea(r.area_da)}</td>)}
+                    {vis('legal') && (<td className="num" onClick={legalOn ? stop : undefined}>{legalOn ? <LegalInput le={le} r={r} which="legal" /> : (r.legal_area_dka != null ? fmtDka(r.legal_area_dka) : <span className="empty">—</span>)}</td>)}
+                    {vis('buffer') && (<td className="num" onClick={legalOn ? stop : undefined}>{legalOn ? <LegalInput le={le} r={r} which="buffer" /> : (r.fcy_id ? fmtDka(r.buffer_strip_dka ?? 0) : <span className="empty">—</span>)}</td>)}
+                    {vis('wobuf') && (<td className="num" style={WOBUF_CELL_STYLE}><WoBufferCell r={r} /></td>)}
                     {vis('crop') && (<td onClick={unl('crop') ? stop : undefined}>{unl('crop') ? <InlineCrop ie={ie} r={r} off={0} /> : <><CropCell crop={r.crop} main />{(r.n_second_crops ?? 0) > 0 && <> <span className="chip">+{r.n_second_crops}</span></>}</>}</td>)}
                     {vis('p1') && (<td><CropCell crop={r.crop_prev1} /></td>)}
                     {vis('p2') && (<td><CropCell crop={r.crop_prev2} /></td>)}

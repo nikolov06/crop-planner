@@ -5,10 +5,11 @@ import { supabase } from '../lib/supabase'
 // Редакция по колони директно в таблицата „Сеитбооборот“ (след отключване на колоната).
 // Данните за редакцията се зареждат при първото отключване; записът е по клетка, веднага.
 
-export type InlineKey = 'field_name' | 'area' | 'crop' | 'tillage'
+export type InlineKey = 'field_name' | 'area' | 'crop' | 'tillage' | 'legal'
 export const INLINE_COLS: { key: InlineKey; label: string }[] = [
   { key: 'field_name', label: 'Наименование' }, { key: 'area', label: 'Площ' }, { key: 'crop', label: 'Култура (само текущ сезон)' },
   { key: 'tillage', label: 'Почвообработка (1 и 2)' },
+  { key: 'legal', label: 'Площ правно осн. и буферна ивица' },
 ]
 
 export type RowLike = {

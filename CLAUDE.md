@@ -47,10 +47,14 @@ Crop Planner е уеб приложение за планиране на зем�
 - `20261118120000_postgis.sql` (разширение PostGIS в схема `extensions`)
 - `20261118130000_work_field_geom.sql` (`work_field.geom`, `jd_field_id`, `geom_updated_at`; махнати `field.geom` и `field_crop_year.isak_geom`)
 - `20261118140000_map_views.sql` (изгледи `v_work_field_geojson`, `v_work_field_season`; функция `set_work_field_geom`)
+- `20261118150000_bzs_legal_area.sql` (`field_crop_year.legal_area_dka`, `buffer_strip_dka` – преименувана от `buffer_area_da`, `area_wo_buffer_dka` GENERATED; `v_rotation_list` с площите; функция `set_bzs_legal_areas`)
+- `20261118160000_company_name_cyrillic.sql` (латински букви в имената на фирмите → кирилица)
 
 Типът за геометрия е `extensions.geometry`.
 
 Границите на обработваемите полета са импортирани от John Deere Operations Center на 18.11.2026 в `work_field.geom` (заедно с `jd_field_id`): 548 от 559 полета имат граница, 11 са без. Изходните файлове са в `geom/` (не се комитва).
+
+Площите по правно основание и буферните ивици за 2026/2027 са импортирани на 18.11.2026 от `supabase/imports/plosht_pravno_osnovanie_2026-2027.csv` (не се комитва): 647 от 648 БЗС, 130 693 дка правно основание, 265 дка буфер. Части на БЗС от файла (разширени имена в `field_alias`) се сумират към БЗС.
 
 Не изпълнявай `supabase db push` без изрично съгласие на собственика на проекта.
 
