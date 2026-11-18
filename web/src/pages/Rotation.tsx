@@ -43,8 +43,8 @@ type Row = {
 }
 
 type ColKey = 'field_name' | 'company' | 'base' | 'area' | 'legal' | 'buffer' | 'wobuf' | 'crop' | 'p1' | 'p2' | 'p3' | 'p4' | 'potential' | 'tillage' | 'variety' | 'repro' | 'rate' | 'rate2'
-type Kind = 'text' | 'select' | 'num' | 'none'
-type Col = { key: ColKey; kind: Kind; num?: boolean }
+type Kind = 'text' | 'select' | 'num' // num: без филтър, само сортиране
+type Col = { key: ColKey; kind: Kind }
 
 const PAGE = 1000
 const EMPTY = '__empty'
@@ -52,13 +52,13 @@ const POT_RANK: Record<string, number> = { 'лоша': 1, 'средна': 2, 'д
 
 const COLS: Col[] = [
   { key: 'field_name', kind: 'text' }, { key: 'company', kind: 'select' }, { key: 'base', kind: 'select' },
-  { key: 'area', kind: 'num', num: true },
-  { key: 'legal', kind: 'num', num: true }, { key: 'buffer', kind: 'num', num: true }, { key: 'wobuf', kind: 'num', num: true },
+  { key: 'area', kind: 'num' },
+  { key: 'legal', kind: 'num' }, { key: 'buffer', kind: 'num' }, { key: 'wobuf', kind: 'num' },
   { key: 'crop', kind: 'select' },
   { key: 'p1', kind: 'select' }, { key: 'p2', kind: 'select' }, { key: 'p3', kind: 'select' }, { key: 'p4', kind: 'select' },
   { key: 'potential', kind: 'select' }, { key: 'tillage', kind: 'select' },
-  { key: 'variety', kind: 'select' }, { key: 'repro', kind: 'select' }, { key: 'rate', kind: 'num', num: true },
-  { key: 'rate2', kind: 'none', num: true },
+  { key: 'variety', kind: 'select' }, { key: 'repro', kind: 'select' }, { key: 'rate', kind: 'num' },
+  { key: 'rate2', kind: 'num' },
 ]
 
 // значение на колона за един ред (за филтри и сортиране)
@@ -107,7 +107,6 @@ export default function Rotation() {
   // търсене от адреса (#/rotation?q=…), напр. от „Отвори в Сеитбооборот“ в картата
   const [q, setQ] = useState(() => new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('q') ?? '')
   const [sel, setSel] = useState<Record<string, string>>({})          // текст/избор по колона
-  const [rng, setRng] = useState<Record<string, { min: string; max: string }>>({})  // площ, норма
   const [sort, setSort] = useState<{ key: ColKey; dir: 1 | -1 }>({ key: 'field_name', dir: 1 })
   const [openId, setOpenId] = useState<string | null>(null)
   const colPrefs = useHiddenCols('rotation')
@@ -208,8 +207,8 @@ export default function Rotation() {
     return o
   }, [rows])
 
-  const activeCount = Object.values(sel).filter(Boolean).length + Object.values(rng).filter((x) => x.min || x.max).length + (q ? 1 : 0)
-  const clearAll = () => { setQ(''); setSel({}); setRng({}) }
+  const activeCount = Object.values(sel).filter(Boolean).length + (q ? 1 : 0)
+  const clearAll = () => { setQ(''); setSel({}) }
 
   const view = useMemo(() => {
     const needle = q.trim().toLowerCase()
@@ -219,14 +218,7 @@ export default function Rotation() {
         if (!hay.includes(needle)) return false
       }
       for (const c of COLS) {
-        if (c.kind === 'num') {
-          const f = rng[c.key]; if (!f || (!f.min && !f.max)) continue
-          const v = numVal(r, c.key as NumKey)
-          if (v == null) return false
-          if (f.min && v < Number(f.min.replace(',', '.'))) return false
-          if (f.max && v > Number(f.max.replace(',', '.'))) return false
-          continue
-        }
+        if (c.kind === 'num') continue
         const f = sel[c.key]; if (!f) continue
         if (c.kind === 'text') { if (!textVal(r, c.key).toLowerCase().includes(f.toLowerCase())) return false; continue }
         if (c.key === 'variety' || c.key === 'repro') {
@@ -242,13 +234,13 @@ export default function Rotation() {
     const { key, dir } = sort
     const col = COLS.find((c) => c.key === key)!
     list.sort((a, b) => {
-      if (col.kind === 'num' || col.kind === 'none') return ((numVal(a, key as NumKey) ?? -1) - (numVal(b, key as NumKey) ?? -1)) * dir
+      if (col.kind === 'num') return ((numVal(a, key as NumKey) ?? -1) - (numVal(b, key as NumKey) ?? -1)) * dir
       const f = (r: Row) => key === 'variety' || key === 'repro' ? (seedVals(r, key)[0] ?? '') : textVal(r, key)
       if (key === 'potential') return ((POT_RANK[f(a)] ?? 0) - (POT_RANK[f(b)] ?? 0)) * dir
       return f(a).localeCompare(f(b), 'bg') * dir
     })
     return list
-  }, [rows, q, sel, rng, sort])
+  }, [rows, q, sel, sort])
 
   const total = useMemo(() => view.reduce((s, r) => s + (r.area_da ?? 0), 0), [view])
   const legalTotal = useMemo(() => view.reduce((s, r) => ({ l: s.l + (r.legal_area_dka ?? 0), b: s.b + (r.fcy_id ? r.buffer_strip_dka ?? 0 : 0), w: s.w + (r.area_wo_buffer_dka ?? 0) }), { l: 0, b: 0, w: 0 }), [view])
@@ -287,7 +279,7 @@ export default function Rotation() {
     <>
       <div className="page-head">
         <h1>Сеитбооборот</h1>
-        <span className="muted">{loading ? 'Зареждане…' : `Показани ${view.length} от ${rows.length} полета · ${fmtArea(total)} дка · правно осн. ${fmtDka(legalTotal.l)} · буфер ${fmtDka(legalTotal.b)} · без буфер ${fmtDka(legalTotal.w)} дка`}</span>
+        <span className="muted">{loading ? 'Зареждане…' : `Показани ${view.length} от ${rows.length} полета · ${fmtDka(total)} дка · правно осн. ${fmtDka(legalTotal.l)} · буфер ${fmtDka(legalTotal.b)} · без буфер ${fmtDka(legalTotal.w)} дка`}</span>
       </div>
 
       {error && <div className="banner err" role="alert">Грешка при зареждане: {error}</div>}
@@ -328,7 +320,7 @@ export default function Rotation() {
       {flash && <div className={flashErr ? 'banner err' : 'banner'} role={flashErr ? 'alert' : 'status'} onClick={() => setFlash(null)}>{flash}</div>}
       {picked.size > 0 && (
         <div className="banner" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <strong>Избрани: {picked.size} БЗС · {fmtArea(rows.filter((x) => picked.has(x.field_id)).reduce((a, x) => a + (x.area_da ?? 0), 0))} дка</strong>
+          <strong>Избрани: {picked.size} БЗС · {fmtDka(rows.filter((x) => picked.has(x.field_id)).reduce((a, x) => a + (x.area_da ?? 0), 0))} дка</strong>
           <button className="btn" onClick={() => setBulkOpen(true)}>Промени култура / почвообработка…</button>
           <button className="btn" onClick={() => setLegalModal('bulk')}>Задай площ правно осн. / буфер…</button>
           <button className="btn outline" onClick={() => setPicked(new Set())}>Изчисти избора</button>
@@ -348,7 +340,7 @@ export default function Rotation() {
               <th style={{ width: 34 }}><input type="checkbox" aria-label="Избери всички показани" checked={view.length > 0 && view.every((x) => picked.has(x.field_id))}
                 onChange={() => setPicked((p) => { const n = new Set(p); if (view.length > 0 && view.every((x) => n.has(x.field_id))) view.forEach((x) => n.delete(x.field_id)); else view.forEach((x) => n.add(x.field_id)); return n })} /></th>
               {shownCols.map((c) => (
-                <th key={c.key} className={c.num ? 'num' : ''}>
+                <th key={c.key} className={c.kind === 'num' ? 'num' : ''}>
                   <button onClick={() => toggleSort(c.key)}>{label[c.key]} {arrow(c.key)}</button>
                   {c.key === 'field_name' && (
                     <ColumnPicker items={COLS.filter((x) => x.key !== 'field_name').map((x) => ({ key: x.key, label: label[x.key] }))}
@@ -361,7 +353,7 @@ export default function Rotation() {
             <tr className="filter-row">
               <th />
               {shownCols.map((c) => (
-                <th key={c.key} className={c.num ? 'num' : ''}>
+                <th key={c.key} className={c.kind === 'num' ? 'num' : ''}>
                   {c.kind === 'text' && (
                     <input className="input fi" placeholder="Филтър" value={sel[c.key] ?? ''} onChange={(e) => setSel({ ...sel, [c.key]: e.target.value })} aria-label={`Филтър ${label[c.key]}`} />
                   )}
@@ -369,12 +361,6 @@ export default function Rotation() {
                     <MultiFilter value={sel[c.key] ?? ''} onChange={(v) => setSel({ ...sel, [c.key]: v })} ariaLabel={`Филтър ${label[c.key]}`}
                       specials={[{ value: EMPTY, label: '— празно —' }]}
                       options={(options[c.key] ?? []).map((v) => ({ value: v, label: cropKeys.includes(c.key) ? cropLabel(v) : v }))} />
-                  )}
-                  {c.kind === 'num' && (
-                    <span className="range">
-                      <input className="input fi" inputMode="decimal" placeholder="от" value={rng[c.key]?.min ?? ''} onChange={(e) => setRng({ ...rng, [c.key]: { min: e.target.value, max: rng[c.key]?.max ?? '' } })} aria-label={`${label[c.key]} от`} />
-                      <input className="input fi" inputMode="decimal" placeholder="до" value={rng[c.key]?.max ?? ''} onChange={(e) => setRng({ ...rng, [c.key]: { min: rng[c.key]?.min ?? '', max: e.target.value } })} aria-label={`${label[c.key]} до`} />
-                    </span>
                   )}
                 </th>
               ))}
@@ -399,7 +385,7 @@ export default function Rotation() {
                     </td>
                     {vis('company') && (<td>{r.company_name ?? <span className="empty">—</span>}</td>)}
                     {vis('base') && (<td>{r.farm_base_name ?? <span className="empty">—</span>}</td>)}
-                    {vis('area') && (<td className="num" onClick={unl('area') ? stop : undefined}>{unl('area') ? <InlineArea ie={ie} r={r} /> : fmtArea(r.area_da)}</td>)}
+                    {vis('area') && (<td className="num" onClick={unl('area') ? stop : undefined}>{unl('area') ? <InlineArea ie={ie} r={r} /> : fmtDka(r.area_da)}</td>)}
                     {vis('legal') && (<td className="num" onClick={legalOn ? stop : undefined}>{legalOn ? <LegalInput le={le} r={r} which="legal" /> : (r.legal_area_dka != null ? fmtDka(r.legal_area_dka) : <span className="empty">—</span>)}</td>)}
                     {vis('buffer') && (<td className="num" onClick={legalOn ? stop : undefined}>{legalOn ? <LegalInput le={le} r={r} which="buffer" /> : (r.fcy_id ? fmtDka(r.buffer_strip_dka ?? 0) : <span className="empty">—</span>)}</td>)}
                     {vis('wobuf') && (<td className="num" style={WOBUF_CELL_STYLE}><WoBufferCell r={r} /></td>)}
@@ -436,7 +422,7 @@ export default function Rotation() {
                             {(r.aliases ?? []).length === 0 ? <span className="empty">Няма</span> : (
                               <table className="mini"><thead><tr><th>Име</th><th>ИСАК №</th><th className="num">Площ</th></tr></thead><tbody>
                                 {(r.aliases ?? []).map((a, i) => (
-                                  <tr key={i}><td>{a.name}</td><td>{a.isak_number ?? '—'}</td><td className="num">{fmtArea(a.area_da)}</td></tr>
+                                  <tr key={i}><td>{a.name}</td><td>{a.isak_number ?? '—'}</td><td className="num">{fmtDka(a.area_da)}</td></tr>
                                 ))}
                               </tbody></table>
                             )}
@@ -446,7 +432,7 @@ export default function Rotation() {
                             {seeds.length === 0 ? <span className="empty">Още няма въведени</span> : (
                               <table className="mini"><thead><tr><th>Сорт</th><th>Размн.</th><th className="num">Площ</th><th className="num">Норма</th><th className="num">кг/дка · сем./ха</th><th>Произход</th></tr></thead><tbody>
                                 {seeds.map((s, i) => (
-                                  <tr key={i}><td>{s.variety ?? '—'}</td><td>{s.reproduction ?? '—'}</td><td className="num">{fmtArea(s.area_da)}</td><td className="num">{s.rate != null ? fmtRate(s.rate, s.rate_basis) : '—'}</td><td className="num">{seedRate2(s)?.text ?? '—'}</td><td>{s.origin ?? '—'}</td></tr>
+                                  <tr key={i}><td>{s.variety ?? '—'}</td><td>{s.reproduction ?? '—'}</td><td className="num">{fmtDka(s.area_da)}</td><td className="num">{s.rate != null ? fmtRate(s.rate, s.rate_basis) : '—'}</td><td className="num">{seedRate2(s)?.text ?? '—'}</td><td>{s.origin ?? '—'}</td></tr>
                                 ))}
                               </tbody></table>
                             )}

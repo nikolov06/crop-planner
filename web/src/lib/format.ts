@@ -29,9 +29,11 @@ const CROP_COLOR: Record<string, string> = {
 export const cropColor = (crop: string | null | undefined) =>
   (crop && CROP_COLOR[crop]) || 'var(--crop-other)'
 
-// ПШЕНИЦА -> Пшеница
+// ПШЕНИЦА -> Пшеница, ПОЛИВНА ЦАРЕВИЦА -> Поливна царевица
+// Съкращенията остават с главни букви: НПП -> НПП, ЕНП РЕАЛНО -> ЕНП реално
+const ABBR = new Set(['НПП', 'ЕНП'])
 export const cropLabel = (crop: string | null | undefined) =>
-  crop ? crop.charAt(0) + crop.slice(1).toLowerCase() : ''
+  crop ? crop.split(/(\s+|\/)/).map((w, i) => (ABBR.has(w) ? w : i === 0 ? w.charAt(0) + w.slice(1).toLowerCase() : w.toLowerCase())).join('') : ''
 
 // Площи в дка с интервал за хилядите винаги (bg-BG не групира 4-цифрени числа): 1 768,5
 const nfDka = new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 })

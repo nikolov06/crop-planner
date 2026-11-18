@@ -164,8 +164,6 @@ table.grid.narrow { min-width: 0; }
 /* ---------- филтри по колони + залепена първа колона ---------- */
 table.grid tr.filter-row th { top: 38px; padding: 4px 8px 8px; background: var(--surface-subtle); border-bottom: 1px solid var(--border); }
 .input.fi { min-height: 36px; padding: 6px 8px; font-size: 13px; width: 100%; min-width: 90px; }
-.range { display: flex; gap: 4px; }
-.range .fi { min-width: 56px; }
 table.grid th:first-child, table.grid td:first-child { position: sticky; left: 0; z-index: 2; background: var(--surface-card); }
 table.grid tr.filter-row th:first-child { background: var(--surface-subtle); z-index: 3; }
 table.grid thead tr:first-child th:first-child { z-index: 3; }
