@@ -160,7 +160,7 @@ export default function SeedPlanning() {
     const crop = cropById.get(p.crop_id)
     const rows = seedsByPlanting.get(p.planting_id) ?? []
     if (!crop || rows.length === 0) return null
-    const sum: Calc = { totalSeedsM2: null, kgDa: null, kg: 0, t: 0, packs: 0, missing: false }
+    const sum: Pick<Calc, 'totalSeedsM2' | 'kgDa' | 'kg' | 't' | 'packs' | 'missing'> = { totalSeedsM2: null, kgDa: null, kg: 0, t: 0, packs: 0, missing: false }
     for (const r of rows) {
       const c = calcRow(crop, r, r.batch_id ? batchById.get(r.batch_id) : undefined, varById.get(r.variety_id))
       if (c.missing) sum.missing = true
