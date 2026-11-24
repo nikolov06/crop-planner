@@ -96,7 +96,7 @@ const r = (o: Partial<RecapInput>): RecapInput => ({
 test('закръгляне: 3,5 + 4,8 + 32,3 → нужда 40,6, за заявка 41', () => {
   const rows = [3.5, 4.8, 32.3].map((x) => r({ need: x, withOverage: x }))
   const tree = buildSeedRecap(rows, new Map([['v1', { price: 165, unit: 'pack' as const, supplier: 'Доставчик' }]]))
-  const v = tree.children[0].children[0].children[0].children[0]
+  const v = tree.children[0].children[0].children[0]
   assert.equal(v.withOverage.packs, 40.6)
   assert.equal(v.order.packs, 41)
   assert.equal(v.value, 41 * 165)
@@ -105,9 +105,17 @@ test('закръгляне: 3,5 + 4,8 + 32,3 → нужда 40,6, за заяв�
 test('торбите на БЗС се закръглят до 1 знак преди сумата', () => {
   // 3,46 → 3,5; 4,84 → 4,8; 32,26 → 32,3 → 40,6 → 41
   const rows = [3.46, 4.84, 32.26].map((x) => r({ need: x, withOverage: x }))
-  const v = buildSeedRecap(rows, new Map()).children[0].children[0].children[0].children[0]
+  const v = buildSeedRecap(rows, new Map()).children[0].children[0].children[0]
   assert.equal(v.withOverage.packs, 40.6); assert.equal(v.order.packs, 41)
   assert.equal(v.priceMissing, true); assert.equal(v.value, null)
+})
+
+test('фирмите не делят заявката: една база, две фирми → закръгля се веднъж', () => {
+  const rows = [r({ company: 'Ф1', need: 0.4, withOverage: 0.4 }), r({ company: 'Ф2', need: 0.4, withOverage: 0.4 })]
+  const tree = buildSeedRecap(rows, new Map())
+  assert.equal(tree.children.length, 1)
+  assert.equal(tree.order.packs, 1)               // ⌈0,8⌉ = 1, не 1 + 1
+  assert.equal(orderLines(tree)[0].bzs, 2)
 })
 
 test('тоталът е сума на закръглените по бази (не се закръгля отново)', () => {
@@ -124,7 +132,7 @@ test('тоталът е сума на закръглените по бази (н
 test('тонове: сума с 2 знака, без закръгляне нагоре; цена в кг се превръща', () => {
   const rows = [r({ crop: 'ЕЧЕМИК', unit: 't', rate: 22, rateUnit: 'кг/дка', need: 1.936, withOverage: 1.99408 }), r({ crop: 'ЕЧЕМИК', unit: 't', rate: 23, rateUnit: 'кг/дка', area: 300, need: 6.9, withOverage: 7.107 })]
   const tree = buildSeedRecap(rows, new Map([['v1', { price: 0.31, unit: 'kg' as const, supplier: 'Собствено производство' }]]))
-  const crop = tree.children[0].children[0].children[0]
+  const crop = tree.children[0].children[0]
   const v = crop.children[0]
   assert.equal(v.need.t, 8.84)                    // 1,94 + 6,90
   assert.equal(v.withOverage.t, 9.1)              // 1,99 + 7,11

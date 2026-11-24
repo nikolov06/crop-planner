@@ -1,4 +1,5 @@
-// Рекапитулация / заявка за семена: Фирма → База → Култура → Сорт.
+// Рекапитулация / заявка за семена: База → Култура → Сорт.
+// Фирмата е само филтър: заявката се закръгля за База × Сорт, независимо на коя фирма са БЗС-тата.
 // Закръгляне (по заданието):
 //   - на ниво БЗС: торби с 1 знак, тонове с 2 знака (както се виждат в Планиране);
 //   - Сорт × База: торбите се сумират и закръглят НАГОРЕ до цяла торба („за заявка“),
@@ -8,6 +9,7 @@
 import { round1, round2, seedCost, type QtyUnit, type SeedPrice } from './seedcalc.ts'
 
 export type RecapInput = {
+  /** само за филтъра; не влияе на закръглянето */
   company: string
   base: string
   crop: string
@@ -24,7 +26,7 @@ export type RecapInput = {
 }
 export type Qty = { packs: number; t: number }
 export type RecapNode = {
-  level: 'company' | 'base' | 'crop' | 'variety' | 'total'
+  level: 'base' | 'crop' | 'variety' | 'total'
   key: string
   label: string
   n: number
@@ -107,40 +109,27 @@ export function buildSeedRecap(rows: RecapInput[], prices: Map<string, SeedPrice
     for (const x of xs) { const k = f(x); m.set(k, [...(m.get(k) ?? []), x]) }
     return m
   }
-  const companies: RecapNode[] = []
-  for (const [co, coRows] of group(rows, (r) => r.company)) {
-    const bases: RecapNode[] = []
-    for (const [ba, baRows] of group(coRows, (r) => r.base)) {
-      const crops: RecapNode[] = []
-      for (const [cr, crRows] of group(baRows, (r) => r.crop)) {
-        const vars = [...group(crRows, (r) => r.varietyId).values()].map((vr) => leaf(vr, prices.get(vr[0].varietyId))).sort(byLabel)
-        crops.push(sumNodes('crop', `${co}|${ba}|${cr}`, cr, vars))
-      }
-      bases.push(sumNodes('base', `${co}|${ba}`, ba, crops.sort(byLabel)))
+  const bases: RecapNode[] = []
+  for (const [ba, baRows] of group(rows, (r) => r.base)) {
+    const crops: RecapNode[] = []
+    for (const [cr, crRows] of group(baRows, (r) => r.crop)) {
+      const vars = [...group(crRows, (r) => r.varietyId).values()].map((vr) => leaf(vr, prices.get(vr[0].varietyId))).sort(byLabel)
+      crops.push(sumNodes('crop', `${ba}|${cr}`, cr, vars))
     }
-    companies.push(sumNodes('company', co, co, bases.sort(byLabel)))
+    bases.push(sumNodes('base', ba, ba, crops.sort(byLabel)))
   }
-  return sumNodes('total', 'total', 'ОБЩО', companies.sort(byLabel))
+  return sumNodes('total', 'total', 'ОБЩО', bases.sort(byLabel))
 }
 
-/** Плосък лист „Заявка“: един ред за База × Сорт. Сумира закръглените количества от дървото
- *  (при няколко фирми в една база – сума на закръглените по фирма), за да съвпада с екрана. */
-export type OrderLine = { base: string; crop: string; variety: string; unit: QtyUnit; companies: number; need: number; withOverage: number; order: number; supplier: string | null; price: SeedPrice | undefined; value: number | null; mismatch: boolean }
+/** Плосък лист „Заявка“: един ред за База × Сорт – същите числа като в дървото. */
+export type OrderLine = { base: string; crop: string; variety: string; unit: QtyUnit; bzs: number; area: number; need: number; withOverage: number; order: number; supplier: string | null; price: SeedPrice | undefined; value: number | null; mismatch: boolean }
 export function orderLines(tree: RecapNode): OrderLine[] {
-  const m = new Map<string, OrderLine>()
-  for (const co of tree.children) for (const ba of co.children) for (const cr of ba.children) for (const v of cr.children) {
+  const out: OrderLine[] = []
+  for (const ba of tree.children) for (const cr of ba.children) for (const v of cr.children) {
     const u = v.unit ?? 'packs'
     const q = (x: Qty) => (u === 'packs' ? x.packs : x.t)
-    const k = `${ba.label}|${v.key}`
-    const cur = m.get(k)
-    if (!cur) {
-      m.set(k, { base: ba.label, crop: cr.label, variety: v.label, unit: u, companies: 1, need: q(v.need), withOverage: q(v.withOverage), order: q(v.order),
-        supplier: v.price?.supplier ?? null, price: v.price, value: v.value, mismatch: v.unitMismatch })
-    } else {
-      const r = u === 'packs' ? round1 : round2
-      cur.companies++; cur.need = r(cur.need + q(v.need)); cur.withOverage = r(cur.withOverage + q(v.withOverage)); cur.order = r(cur.order + q(v.order))
-      cur.value = cur.value == null || v.value == null ? null : round2(cur.value + v.value)
-    }
+    out.push({ base: ba.label, crop: cr.label, variety: v.label, unit: u, bzs: v.n, area: v.area, need: q(v.need), withOverage: q(v.withOverage), order: q(v.order),
+      supplier: v.price?.supplier ?? null, price: v.price, value: v.value, mismatch: v.unitMismatch })
   }
-  return [...m.values()].sort((a, b) => a.base.localeCompare(b.base, 'bg') || (a.supplier ?? '').localeCompare(b.supplier ?? '', 'bg') || a.variety.localeCompare(b.variety, 'bg'))
+  return out.sort((a, b) => a.base.localeCompare(b.base, 'bg') || (a.supplier ?? '').localeCompare(b.supplier ?? '', 'bg') || a.variety.localeCompare(b.variety, 'bg'))
 }
