@@ -1,13 +1,22 @@
-// Четене на таблица от файл: CSV (UTF-8, разделител , ; или таб) или .xlsx (първият лист).
+// Четене на таблица от файл: CSV (UTF-8, разделител , ; или таб) или .xlsx (първият лист или всички листове).
 // Без външни пакети: .xlsx се разархивира с DecompressionStream('deflate-raw') на браузъра.
 
 export type Table = string[][]
 
 export async function readTableFile(file: File): Promise<Table> {
+  return (await readTableSheets(file))[0]?.rows ?? []
+}
+
+/** Всички листове на .xlsx (за CSV – един лист). */
+export async function readTableSheets(file: File): Promise<{ name: string; rows: Table }[]> {
   const buf = new Uint8Array(await file.arrayBuffer())
   const isZip = buf.length > 4 && buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04
-  if (isZip) return readXlsx(buf)
-  if (/\.xls$/i.test(file.name)) throw new Error('Старият формат .xls не се поддържа – запиши файла като .xlsx или CSV (UTF-8).')
+  if (isZip) return readXlsxSheets(buf)
+  return [{ name: file.name, rows: await readTextTable(file.name, buf) }]
+}
+
+async function readTextTable(fileName: string, buf: Uint8Array): Promise<Table> {
+  if (/\.xls$/i.test(fileName)) throw new Error('Старият формат .xls не се поддържа – запиши файла като .xlsx или CSV (UTF-8).')
   let text: string
   try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf) } catch { throw new Error('Файлът не е в UTF-8. В Excel: „Запиши като“ → „CSV UTF-8 (разделен със запетаи)“.') }
   return parseCsv(text)
@@ -81,25 +90,35 @@ const xml = (s: string) => new DOMParser().parseFromString(s, 'application/xml')
 const tags = (n: Document | Element, name: string) => Array.from(n.getElementsByTagNameNS('*', name))
 const colIdx = (ref: string) => { let n = 0; for (const ch of ref.replace(/\d+$/, '')) n = n * 26 + (ch.charCodeAt(0) - 64); return n - 1 }
 
-async function readXlsx(b: Uint8Array): Promise<Table> {
+async function readXlsxSheets(b: Uint8Array): Promise<{ name: string; rows: Table }[]> {
   const zip = zipEntries(b)
   const get = async (name: string) => { const e = zip.get(name); return e ? zipText(b, e) : null }
-  // първият лист според workbook.xml и връзките му
-  let sheetPath = 'xl/worksheets/sheet1.xml'
+  // листовете по ред според workbook.xml и връзките му
+  const list: { name: string; path: string }[] = []
   const wb = await get('xl/workbook.xml')
   const rels = await get('xl/_rels/workbook.xml.rels')
   if (wb && rels) {
-    const s = tags(xml(wb), 'sheet')[0]
-    const rid = s?.getAttribute('r:id') ?? s?.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id')
-    const rel = tags(xml(rels), 'Relationship').find((r) => r.getAttribute('Id') === rid)
-    const t = rel?.getAttribute('Target')
-    if (t) sheetPath = t.startsWith('/') ? t.slice(1) : `xl/${t.replace(/^\.\//, '')}`
+    const relEls = tags(xml(rels), 'Relationship')
+    for (const s of tags(xml(wb), 'sheet')) {
+      const rid = s.getAttribute('r:id') ?? s.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id')
+      const t = relEls.find((r) => r.getAttribute('Id') === rid)?.getAttribute('Target')
+      if (t && s.getAttribute('state') !== 'hidden') list.push({ name: s.getAttribute('name') ?? '', path: t.startsWith('/') ? t.slice(1) : `xl/${t.replace(/^\.\//, '')}` })
+    }
   }
+  if (list.length === 0) list.push({ name: 'Лист 1', path: 'xl/worksheets/sheet1.xml' })
   const shared: string[] = []
   const ss = await get('xl/sharedStrings.xml')
   if (ss) for (const si of tags(xml(ss), 'si')) shared.push(tags(si, 't').map((t) => t.textContent ?? '').join(''))
-  const sh = await get(sheetPath)
-  if (!sh) throw new Error('В .xlsx няма лист с данни.')
+  const out: { name: string; rows: Table }[] = []
+  for (const s of list) {
+    const sh = await get(s.path)
+    if (sh) out.push({ name: s.name, rows: sheetTable(sh, shared) })
+  }
+  if (out.length === 0) throw new Error('В .xlsx няма лист с данни.')
+  return out
+}
+
+function sheetTable(sh: string, shared: string[]): Table {
   const out: Table = []
   for (const r of tags(xml(sh), 'row')) {
     const row: string[] = []

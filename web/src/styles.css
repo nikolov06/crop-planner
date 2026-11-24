@@ -131,6 +131,12 @@ table.grid tr.detail td { background: var(--surface-subtle); white-space: normal
 .chip { display: inline-block; font-size: 12px; font-weight: 600; border-radius: var(--radius-sm); padding: 3px 8px; background: var(--surface-chip); color: var(--info-ink); }
 .chip.ok { background: var(--ok-strong-bg); color: var(--ok-ink); }
 .chip.warn { background: var(--warn-bg); color: var(--warn-ink); }
+.chip.err { background: #fbeae7; color: #7a1f12; }
+/* Импорт от таблица: оцветяване на редовете по статус */
+table.grid tr.imp-red td { background: #fdf3f1; }
+table.grid tr.imp-yellow td { background: #fdf8ec; }
+table.grid tr.warn-row td { background: #fdf3f1; }
+.seed-import textarea.input { width: 100%; resize: vertical; }
 .empty { color: var(--ink-muted); }
 .detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 24px; }
 .detail h3 { margin: 0 0 8px 0; font-size: 13px; font-weight: 600; color: var(--ink-muted); }

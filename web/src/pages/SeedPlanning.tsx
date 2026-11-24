@@ -2,7 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { fmtArea, fmtInt, cropColor, cropLabel } from '../lib/format'
 import { ColumnPicker, useHiddenCols } from '../lib/columns'
-import { MultiFilter, anyToken } from '../lib/multifilter'
+import { MultiFilter, anyToken, splitMulti } from '../lib/multifilter'
+import { calcRow, type Calc, type Crop, type Variety, type Batch } from '../lib/seedcalc'
+import { useConfirm } from '../lib/confirm'
+import SeedImport from './SeedImport'
 
 type Planting = {
   planting_id: string
@@ -14,25 +17,6 @@ type Planting = {
   crop_name: string
   planted_area_da: number | null
 }
-type Crop = {
-  crop_id: string
-  name_bg: string
-  seeding_method: 'solid' | 'row' | null
-  rate_basis: string | null
-  order_unit: string | null
-  default_seeds_per_pack: number | null
-  seed_overage_pct: number | null
-  rate_rounding_step: number | null
-}
-type Variety = { variety_id: string; crop_id: string; name: string; seeds_per_pack: number | null }
-type Batch = {
-  batch_id: string
-  variety_id: string
-  reproduction_id: number | null
-  tkw_g: number | null
-  germination_pct: number | null
-  seeds_per_pack: number | null
-}
 type Repro = { reproduction_id: number; name: string }
 type PSeed = {
   planting_seed_id: string
@@ -43,7 +27,9 @@ type PSeed = {
   target_rate: number
   overage_pct: number | null
   seed_origin: string | null
+  addon?: string | null
 }
+type LastImport = { import_id: string; created_at: string; rows_applied: number; file_name: string | null }
 
 const PAGE = 1000
 async function fetchAll<T>(build: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>): Promise<T[]> {
@@ -58,27 +44,8 @@ async function fetchAll<T>(build: (from: number, to: number) => PromiseLike<{ da
   return all
 }
 
-type Calc = { totalSeedsM2: number | null; kgDa: number | null; kg: number | null; t: number | null; packs: number | null; missing: boolean }
-
-function calcRow(crop: Crop, ps: { area_da: number; target_rate: number; overage_pct: number | null }, b: Batch | undefined, v?: Variety): Calc {
-  const ov = ps.overage_pct ?? crop.seed_overage_pct ?? 0
-  const spp = b?.seeds_per_pack ?? v?.seeds_per_pack ?? crop.default_seeds_per_pack
-  if (crop.seeding_method === 'solid') {
-    if (!b || !b.germination_pct) return { totalSeedsM2: null, kgDa: null, kg: null, t: null, packs: null, missing: true }
-    const total = Math.ceil(ps.target_rate / (b.germination_pct / 100))
-    if (crop.order_unit === 'packs') {   // слети, но се поръчват на торби (рапица)
-      if (!spp) return { totalSeedsM2: total, kgDa: null, kg: null, t: null, packs: null, missing: true }
-      return { totalSeedsM2: total, kgDa: null, kg: null, t: null, packs: (total * 1000 * ps.area_da * (1 + ov / 100)) / spp, missing: false }
-    }
-    if (!b.tkw_g) return { totalSeedsM2: total, kgDa: null, kg: null, t: null, packs: null, missing: true }
-    const step = crop.rate_rounding_step ?? 1
-    const kgDa = Math.round((total * b.tkw_g) / 1000 / step) * step
-    const kg = kgDa * ps.area_da * (1 + ov / 100)
-    return { totalSeedsM2: total, kgDa, kg, t: kg / 1000, packs: null, missing: false }
-  }
-  if (!spp) return { totalSeedsM2: null, kgDa: null, kg: null, t: null, packs: null, missing: true }
-  return { totalSeedsM2: null, kgDa: null, kg: null, t: null, packs: (ps.target_rate * ps.area_da * (1 + ov / 100)) / spp, missing: false }
-}
+// единствената избрана стойност на мултифилтъра (за обхвата на импорта)
+const one = (v: string) => { const t = splitMulti(v); return t.length === 1 ? t[0] : undefined }
 
 export default function SeedPlanning() {
   const colPrefs = useHiddenCols('seeds')
@@ -112,6 +79,9 @@ export default function SeedPlanning() {
   const [reproF, setReproF] = useState('') // Размножение (отделно от партидата)
   const [rate, setRate] = useState('')
   const [packInput, setPackInput] = useState('')
+  const [importOpen, setImportOpen] = useState(false)
+  const [lastImport, setLastImport] = useState<LastImport | null>(null)
+  const [confirm, confirmNode] = useConfirm()
 
   async function load() {
     setLoading(true)
@@ -131,8 +101,13 @@ export default function SeedPlanning() {
           .select('planting_id,organization_id,field_name,company_name,farm_base_name,crop_id,crop_name,planted_area_da')
           .eq('season_year_end', ye).eq('role', 'main').order('field_name').order('planting_id').range(f, t))
       const ps = await fetchAll<PSeed>((f, t) =>
-        supabase.from('planting_seed').select('planting_seed_id,planting_id,variety_id,batch_id,area_da,target_rate,overage_pct,seed_origin')
+        supabase.from('planting_seed').select('*')
           .order('planting_seed_id').range(f, t))
+      // последният неотменен импорт за текущия сезон (таблицата я има след миграцията за импорта)
+      const seasonId = (await supabase.from('season').select('season_id').eq('is_current', true).limit(1)).data?.[0]?.season_id
+      const li = seasonId != null ? await supabase.from('seed_import').select('import_id,created_at,rows_applied,file_name')
+        .eq('season_id', seasonId).is('undone_at', null).order('created_at', { ascending: false }).limit(1) : null
+      setLastImport(li && !li.error ? ((li.data ?? [])[0] as LastImport | undefined) ?? null : null)
       const withSeeding = new Set(cr.map((c) => c.crop_id))
       setCrops(cr); setVarieties(va); setBatches(ba); setRepros(re); setPseeds(ps)
       setPlantings(pl.filter((p) => withSeeding.has(p.crop_id)))
@@ -242,6 +217,18 @@ export default function SeedPlanning() {
     setBusy(false)
   }
 
+  async function undoImport() {
+    if (!lastImport) return
+    const when = new Date(lastImport.created_at).toLocaleString('bg-BG')
+    const ok = await confirm(`Да отменя ли импорта от ${when} (${lastImport.file_name ?? 'таблица'}, ${lastImport.rows_applied} БЗС)?\nСортовете и нормите на тези БЗС ще се върнат както бяха преди импорта.`, { ok: 'Отмени импорта', danger: true })
+    if (!ok) return
+    setBusy(true); setMsg(null); setError(null)
+    const res = await supabase.rpc('undo_seed_import', { p_import_id: lastImport.import_id })
+    if (res.error) setError(res.error.message)
+    else { setMsg(`Импортът е отменен: върнати ${res.data} БЗС.`); await load() }
+    setBusy(false)
+  }
+
   async function savePack() {
     if (!varietyId || !(packSize > 0)) return
     setBusy(true); setMsg(null); setError(null)
@@ -310,7 +297,20 @@ export default function SeedPlanning() {
         <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 44 }}>
           <input type="checkbox" checked={onlyEmpty} onChange={(e) => setOnlyEmpty(e.target.checked)} /> Само без сорт
         </label>
+        <button className="btn outline" onClick={() => setImportOpen(true)}>Импорт от таблица</button>
+        {lastImport && (
+          <button className="btn outline" disabled={busy} onClick={() => void undoImport()}
+            title={`Последен импорт: ${new Date(lastImport.created_at).toLocaleString('bg-BG')} · ${lastImport.rows_applied} БЗС`}>Отмени последния импорт</button>
+        )}
       </div>
+      {importOpen && (
+        <SeedImport
+          defaults={{ crop: one(cropF), company: one(companyF), base: one(baseF) }}
+          onClose={() => setImportOpen(false)}
+          onDone={(m) => { setImportOpen(false); setMsg(m); void load() }}
+        />
+      )}
+      {confirmNode}
 
       {sel.size > 0 && (
         <div className="card pad seed-toolbar">
@@ -391,7 +391,7 @@ export default function SeedPlanning() {
                   {vis('company') && (<td>{p.company_name ?? <span className="empty">—</span>}</td>)}
                   {vis('crop') && (<td><span className="crop crop-main"><span className="dot" style={{ background: cropColor(p.crop_name) }} />{cropLabel(p.crop_name)}</span></td>)}
                   {vis('area') && (<td className="num">{fmtArea(p.planted_area_da)}</td>)}
-                  {vis('variety') && (<td>{r0 ? <>{varById.get(r0.variety_id)?.name ?? '—'}{rows.length > 1 && <> <span className="chip">+{rows.length - 1}</span></>}</> : <span className="empty">—</span>}</td>)}
+                  {vis('variety') && (<td>{r0 ? <>{varById.get(r0.variety_id)?.name ?? '—'}{r0.addon ? <span className="muted"> + {r0.addon}</span> : null}{rows.length > 1 && <> <span className="chip">+{rows.length - 1}</span></>}</> : <span className="empty">—</span>}</td>)}
                   {vis('repro') && (<td>{r0 && b0?.reproduction_id != null && reproById.get(b0.reproduction_id) ? reproById.get(b0.reproduction_id) : <span className="empty">—</span>}</td>)}
                   {vis('origin') && (<td>{r0?.seed_origin ?? <span className="empty">—</span>}</td>)}
                   {vis('rate') && (<td className="num">{r0 ? fmtInt(r0.target_rate) : ''}{r0 && crop ? <span className="muted"> {crop.seeding_method === 'solid' ? 'к.с./м²' : 'сем./дка'}</span> : ''}</td>)}
