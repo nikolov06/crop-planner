@@ -10,7 +10,7 @@ import FertPlanning from './pages/FertPlanning'
 import Offers from './pages/Offers'
 import Recap from './pages/Recap'
 import RotationRecap from './pages/RotationRecap'
-import Placeholder from './pages/Placeholder'
+import SeedRecap from './pages/SeedRecap'
 // Картите (Leaflet, shpjs) се зареждат отделно, само при отваряне.
 const MapPage = lazy(() => import('./pages/MapPage'))
 const Geometries = lazy(() => import('./pages/Geometries'))
@@ -142,7 +142,7 @@ export default function App() {
         {page === 'rotation-recap' && <RotationRecap />}
         {page === 'seeds' && <SeedPlanning />}
         {page === 'seeds-offers' && <Offers module="seed" />}
-        {page === 'seeds-recap' && <Placeholder title="Планиране семена → Рекапитулация" />}
+        {page === 'seeds-recap' && <SeedRecap />}
         {page === 'fert' && <FertPlanning />}
         {page === 'prz' && <PrzPlanning />}
         {page === 'fert-offers' && <Offers module="fert" />}
