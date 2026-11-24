@@ -38,7 +38,7 @@ const NOMS: Nom[] = [
     cols: [
       { key: 'name_bg', label: 'Култура' }, { key: 'name_en', label: 'Англ.' }, { key: 'crop_group', label: 'Група' },
       { key: 'culture_code', label: 'Код' }, { key: 'short_name', label: 'Кратко' }, { key: 'seeding_method', label: 'Сеитба' },
-      { key: 'rate_basis', label: 'Норма по' }, { key: 'order_unit', label: 'Ед. поръчка' }, { key: 'seed_overage_pct', label: 'Запас, %', num: true },
+      { key: 'rate_basis', label: 'Норма по' }, { key: 'order_unit', label: 'Ед. поръчка' }, { key: 'seed_overage_pct', label: 'Преразход, %', num: true },
       { key: 'default_seeds_per_pack', label: 'Семена в торба', num: true } ],
     fields: [
       { key: 'name_bg', label: 'Култура', type: 'text', required: true }, { key: 'name_en', label: 'Англ. име', type: 'text' },
@@ -48,7 +48,7 @@ const NOMS: Nom[] = [
         options: [{ value: 'solid', label: 'Плътна (solid)' }, { value: 'row', label: 'Редова (row)' }] },
       { key: 'order_unit', label: 'Единица за поръчка', type: 'select', options: [{ value: 'kg', label: 'кг' }, { value: 'packs', label: 'торби' }] },
       { key: 'default_seeds_per_pack', label: 'Семена в торба (по подразбиране)', type: 'num' },
-      { key: 'seed_overage_pct', label: 'Запас, %', type: 'num' }, { key: 'rate_rounding_step', label: 'Стъпка на закръгляване', type: 'num' },
+      { key: 'seed_overage_pct', label: 'Преразход, %', type: 'num', hint: 'Добавя се към нуждата от семена за заявката (напр. 3 % житни, 1,5 % слънчоглед).' }, { key: 'rate_rounding_step', label: 'Стъпка на закръгляване', type: 'num' },
       BOOL_ACTIVE() ],
     nameOf: (r) => String(r.name_bg),
     beforeSave: (p) => {
@@ -60,12 +60,14 @@ const NOMS: Nom[] = [
   { id: 'variety', label: 'Сортове / хибриди', table: 'variety', pk: 'variety_id', order: 'name',
     cols: [
       { key: 'name', label: 'Сорт / хибрид' }, { key: 'crop(name_bg)', label: 'Култура' }, { key: 'breeder', label: 'Селекционер' },
-      { key: 'technology', label: 'Технология' }, { key: 'seeds_eff', label: 'Семена в торба', num: true }, { key: 'is_active', label: 'Активен', bool: true } ],
+      { key: 'technology', label: 'Технология' }, { key: 'tkw_g', label: 'МХЗ, г', num: true }, { key: 'germination_pct', label: 'Кълняемост, %', num: true }, { key: 'seeds_eff', label: 'Семена в торба', num: true }, { key: 'is_active', label: 'Активен', bool: true } ],
     select: '*, crop(name_bg, default_seeds_per_pack)',
     fields: [
       { key: 'crop_id', label: 'Култура', type: 'fk', fk: cropFk, required: true }, { key: 'name', label: 'Сорт / хибрид', type: 'text', required: true },
       { key: 'breeder', label: 'Селекционер', type: 'text' }, { key: 'technology', label: 'Технология', type: 'text' },
       { key: 'seeds_per_pack', label: 'Семена в торба', type: 'num', hint: 'Попълва се само ако се различава от стойността по подразбиране за културата.' },
+      { key: 'tkw_g', label: 'Маса на 1000 семена, г', type: 'num', hint: 'По подразбиране за сорта; партидата и БЗС могат да я сменят.' },
+      { key: 'germination_pct', label: 'Кълняемост, %', type: 'num', hint: 'По подразбиране за сорта; партидата и БЗС могат да я сменят.' },
       BOOL_ACTIVE() ],
     nameOf: (r) => String(r.name) },
   { id: 'reproduction', label: 'Размножения', table: 'reproduction', pk: 'reproduction_id', order: 'sort_order',

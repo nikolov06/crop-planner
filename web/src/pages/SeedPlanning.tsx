@@ -1,59 +1,69 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { supabase } from '../lib/supabase'
 import { fmtArea, fmtInt, cropColor, cropLabel } from '../lib/format'
 import { ColumnPicker, useHiddenCols } from '../lib/columns'
 import { MultiFilter, anyToken, splitMulti } from '../lib/multifilter'
-import { calcRow, type Calc, type Crop, type Variety, type Batch } from '../lib/seedcalc'
+import { calcRow, round1, type Crop, type Variety, type Batch, type SeedPrice, type Source } from '../lib/seedcalc'
+import { loadSeedData, loadSeasons, seedLine, type Planting, type PSeed, type Repro, type SeedLine } from '../lib/seeddata'
+import { downloadXlsx, type Cell } from '../lib/xlsx'
 import { useConfirm } from '../lib/confirm'
 import SeedImport from './SeedImport'
 
-type Planting = {
-  planting_id: string
-  organization_id: string
-  field_name: string
-  company_name: string | null
-  farm_base_name: string | null
-  crop_id: string
-  crop_name: string
-  planted_area_da: number | null
-}
-type Repro = { reproduction_id: number; name: string }
-type PSeed = {
-  planting_seed_id: string
-  planting_id: string
-  variety_id: string
-  batch_id: string | null
-  area_da: number
-  target_rate: number
-  overage_pct: number | null
-  seed_origin: string | null
-  addon?: string | null
-}
 type LastImport = { import_id: string; created_at: string; rows_applied: number; file_name: string | null }
-
-const PAGE = 1000
-async function fetchAll<T>(build: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>): Promise<T[]> {
-  const all: T[] = []
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await build(from, from + PAGE - 1)
-    if (error) throw new Error(error.message)
-    const rows = (data ?? []) as T[]
-    all.push(...rows)
-    if (rows.length < PAGE) break
-  }
-  return all
-}
 
 // единствената избрана стойност на мултифилтъра (за обхвата на импорта)
 const one = (v: string) => { const t = splitMulti(v); return t.length === 1 ? t[0] : undefined }
+
+// bg-BG: запетая за десетични, интервал за хиляди
+const nf = (d: number) => new Intl.NumberFormat('bg-BG', { minimumFractionDigits: d, maximumFractionDigits: d })
+const NF = [nf(0), nf(1), nf(2)]
+const fmtN = (v: number | null | undefined, d: 0 | 1 | 2) => (v == null ? '' : NF[d].format(v))
+const fmtQ = (v: number | null | undefined, packs: boolean) => fmtN(v, packs ? 1 : 2)
+const fmtMaybe = (v: number | null | undefined) => (v == null ? '' : new Intl.NumberFormat('bg-BG', { maximumFractionDigits: 2 }).format(v))
+const UNIT_TEXT: Record<SeedPrice['unit'], string> = { pack: 'торба', t: 'т', kg: 'кг' }
+const SRC_TEXT: Record<Exclude<Source, null>, string> = { bzs: 'за това БЗС', batch: 'от партидата', variety: 'от сорта' }
+const parseNum = (s: string) => { const t = s.replace(/\s/g, '').replace(',', '.'); return t === '' ? null : Number(t) }
+
+// клетка, която се редактира с клик: Enter/излизане записва, Esc отказва; празно = връща стойността по подразбиране
+function EditCell({ value, display, onSave, disabled, title, label }: {
+  value: number | null; display: ReactNode; onSave: (v: number | null) => Promise<void>; disabled?: boolean; title?: string; label: string
+}) {
+  const [edit, setEdit] = useState(false)
+  const [text, setText] = useState('')
+  if (disabled) return <span title={title}>{display}</span>
+  const start = () => { setText(value == null ? '' : String(value).replace('.', ',')); setEdit(true) }
+  if (!edit) {
+    return (
+      <span role="button" tabIndex={0} title={title ? `${title} · клик за промяна` : 'Клик за промяна'} style={{ cursor: 'text', display: 'inline-block', minWidth: 28 }}
+        onClick={(e) => { e.stopPropagation(); start() }}
+        onKeyDown={(e) => { if (e.key === 'Enter') start() }}>
+        {display === '' || display == null ? <span className="empty">·</span> : display}
+      </span>
+    )
+  }
+  const commit = async () => {
+    setEdit(false)
+    const v = parseNum(text)
+    if (v != null && !(v > 0)) return
+    if (v === value) return
+    await onSave(v)
+  }
+  return (
+    <input className="input cell-in" autoFocus inputMode="decimal" aria-label={label} value={text}
+      onClick={(e) => e.stopPropagation()} onChange={(e) => setText(e.target.value)}
+      onBlur={() => void commit()} onKeyDown={(e) => { if (e.key === 'Enter') void commit(); if (e.key === 'Escape') setEdit(false) }} />
+  )
+}
 
 export default function SeedPlanning() {
   const colPrefs = useHiddenCols('seeds')
   const vis = colPrefs.vis
   const pickerItems = [
-    { key: 'company', label: 'Фирма' }, { key: 'crop', label: 'Култура' }, { key: 'area', label: 'Площ, дка' },
-    { key: 'variety', label: 'Сорт / хибрид' }, { key: 'repro', label: 'Размножение' }, { key: 'origin', label: 'Произход' }, { key: 'rate', label: 'Норма' },
-    { key: 'total', label: 'Общи сем./м²' }, { key: 'kgda', label: 'кг/дка' }, { key: 'kg', label: 'кг общо' }, { key: 't', label: 'Тона' }, { key: 'packs', label: 'Торби' },
+    { key: 'company', label: 'Фирма' }, { key: 'base', label: 'Стопанска база' }, { key: 'crop', label: 'Култура' }, { key: 'area', label: 'Площ, дка' },
+    { key: 'variety', label: 'Сорт / хибрид' }, { key: 'repro', label: 'Размножение' }, { key: 'origin', label: 'Произход' },
+    { key: 'tkw', label: 'МХЗ, г' }, { key: 'germ', label: 'Кълняемост, %' }, { key: 'gsm', label: 'Кълняеми/м²' }, { key: 'seeds', label: 'Семена/м²' },
+    { key: 'rate', label: 'Норма' }, { key: 'need', label: 'Нужда' }, { key: 'withov', label: 'С преразход' },
+    { key: 'price', label: 'Цена' }, { key: 'value', label: 'Стойност EUR' }, { key: 'eurda', label: 'EUR/дка' },
   ]
   const shownCols = pickerItems.filter((i) => vis(i.key)).length + 2
   const [plantings, setPlantings] = useState<Planting[]>([])
@@ -62,6 +72,8 @@ export default function SeedPlanning() {
   const [batches, setBatches] = useState<Batch[]>([])
   const [repros, setRepros] = useState<Repro[]>([])
   const [pseeds, setPseeds] = useState<PSeed[]>([])
+  const [prices, setPrices] = useState<Map<string, SeedPrice>>(new Map())
+  const [pricesOk, setPricesOk] = useState(true)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
@@ -79,6 +91,9 @@ export default function SeedPlanning() {
   const [reproF, setReproF] = useState('') // Размножение (отделно от партидата)
   const [rate, setRate] = useState('')
   const [packInput, setPackInput] = useState('')
+  const [qTkw, setQTkw] = useState('')
+  const [qGerm, setQGerm] = useState('')
+  const [qRate, setQRate] = useState('')
   const [importOpen, setImportOpen] = useState(false)
   const [lastImport, setLastImport] = useState<LastImport | null>(null)
   const [confirm, confirmNode] = useConfirm()
@@ -87,30 +102,15 @@ export default function SeedPlanning() {
     setLoading(true)
     setError(null)
     try {
-      const { data: season, error: se } = await supabase.from('season').select('year_end').eq('is_current', true).limit(1)
-      if (se) throw new Error(se.message)
-      const ye = season?.[0]?.year_end
-      const [cr, va, ba, re] = await Promise.all([
-        fetchAll<Crop>((f, t) => supabase.from('crop').select('*').not('seeding_method', 'is', null).range(f, t)),
-        fetchAll<Variety>((f, t) => supabase.from('variety').select('variety_id,crop_id,name,seeds_per_pack').order('name').range(f, t)),
-        fetchAll<Batch>((f, t) => supabase.from('seed_batch').select('batch_id,variety_id,reproduction_id,tkw_g,germination_pct,seeds_per_pack').range(f, t)),
-        fetchAll<Repro>((f, t) => supabase.from('reproduction').select('reproduction_id,name').range(f, t)),
-      ])
-      const pl = await fetchAll<Planting>((f, t) =>
-        supabase.from('v_planting_context')
-          .select('planting_id,organization_id,field_name,company_name,farm_base_name,crop_id,crop_name,planted_area_da')
-          .eq('season_year_end', ye).eq('role', 'main').order('field_name').order('planting_id').range(f, t))
-      const ps = await fetchAll<PSeed>((f, t) =>
-        supabase.from('planting_seed').select('*')
-          .order('planting_seed_id').range(f, t))
-      // последният неотменен импорт за текущия сезон (таблицата я има след миграцията за импорта)
-      const seasonId = (await supabase.from('season').select('season_id').eq('is_current', true).limit(1)).data?.[0]?.season_id
-      const li = seasonId != null ? await supabase.from('seed_import').select('import_id,created_at,rows_applied,file_name')
-        .eq('season_id', seasonId).is('undone_at', null).order('created_at', { ascending: false }).limit(1) : null
-      setLastImport(li && !li.error ? ((li.data ?? [])[0] as LastImport | undefined) ?? null : null)
-      const withSeeding = new Set(cr.map((c) => c.crop_id))
-      setCrops(cr); setVarieties(va); setBatches(ba); setRepros(re); setPseeds(ps)
-      setPlantings(pl.filter((p) => withSeeding.has(p.crop_id)))
+      const seasons = await loadSeasons()
+      const sid = seasons.find((s) => s.is_current)?.season_id ?? seasons[0]?.season_id
+      if (sid == null) throw new Error('Няма текущ сезон.')
+      const d = await loadSeedData(sid)
+      const li = await supabase.from('seed_import').select('import_id,created_at,rows_applied,file_name')
+        .eq('season_id', sid).is('undone_at', null).order('created_at', { ascending: false }).limit(1)
+      setLastImport(!li.error ? ((li.data ?? [])[0] as LastImport | undefined) ?? null : null)
+      setCrops(d.crops); setVarieties(d.varieties); setBatches(d.batches); setRepros(d.repros); setPseeds(d.pseeds)
+      setPlantings(d.plantings); setPrices(d.prices); setPricesOk(d.pricesOk)
     } catch (e) {
       setError((e as Error).message)
     }
@@ -133,10 +133,37 @@ export default function SeedPlanning() {
     return m
   }, [pseeds])
 
+  // сметките за всяко БЗС (един или няколко реда семена)
+  const linesByPlanting = useMemo(() => {
+    const m = new Map<string, SeedLine[]>()
+    for (const p of plantings) {
+      const crop = cropById.get(p.crop_id)
+      const rows = seedsByPlanting.get(p.planting_id) ?? []
+      if (!crop || rows.length === 0) continue
+      m.set(p.planting_id, rows.map((r) => seedLine(crop, r, r.batch_id ? batchById.get(r.batch_id) : undefined, varById.get(r.variety_id), prices.get(r.variety_id))))
+    }
+    return m
+  }, [plantings, cropById, seedsByPlanting, batchById, varById, prices])
+
+  type Sum = { need: number | null; withOverage: number | null; value: number | null; noPrice: boolean; mismatch: boolean; missing: boolean }
+  const sumFor = (ls: SeedLine[] | undefined): Sum | null => {
+    if (!ls || ls.length === 0) return null
+    const packs = ls[0].unit === 'packs'
+    const r = (x: number) => (packs ? round1(x) : Math.round(x * 100) / 100)
+    let need = 0, ov = 0, value = 0, any = false, missing = false, noPrice = false, mismatch = false
+    for (const l of ls) {
+      if (l.need == null || l.withOverage == null) { missing = true; continue }
+      need += l.need; ov += l.withOverage; any = true
+      if (l.value == null) noPrice = true; else value += l.value
+      if (l.mismatch) mismatch = true
+    }
+    return { need: any ? r(need) : null, withOverage: any ? r(ov) : null, value: any && !noPrice ? Math.round(value * 100) / 100 : null, noPrice, mismatch, missing }
+  }
+
   // партида = произход · МХЗ · кълняемост (размножението е отделно поле; показва се в етикета само когато не е избрано)
   const batchLabel = (b: Batch, withRepro = false) =>
     [withRepro && b.reproduction_id != null ? reproById.get(b.reproduction_id) : null, originByBatch.get(b.batch_id),
-      b.tkw_g ? `МХЗ ${b.tkw_g} г` : null, b.germination_pct ? `кълняемост ${b.germination_pct}%` : null].filter(Boolean).join(' · ') || 'без данни'
+      b.tkw_g ? `МХЗ ${fmtMaybe(b.tkw_g)} г` : null, b.germination_pct ? `кълняемост ${fmtMaybe(b.germination_pct)}%` : null].filter(Boolean).join(' · ') || 'без данни'
 
   const opts = useMemo(() => {
     const u = (f: (p: Planting) => string | null) =>
@@ -155,22 +182,6 @@ export default function SeedPlanning() {
       return true
     })
   }, [plantings, q, cropF, companyF, baseF, onlyEmpty, seedsByPlanting])
-
-  const calcFor = (p: Planting) => {
-    const crop = cropById.get(p.crop_id)
-    const rows = seedsByPlanting.get(p.planting_id) ?? []
-    if (!crop || rows.length === 0) return null
-    const sum: Pick<Calc, 'totalSeedsM2' | 'kgDa' | 'kg' | 't' | 'packs' | 'missing'> = { totalSeedsM2: null, kgDa: null, kg: 0, t: 0, packs: 0, missing: false }
-    for (const r of rows) {
-      const c = calcRow(crop, r, r.batch_id ? batchById.get(r.batch_id) : undefined, varById.get(r.variety_id))
-      if (c.missing) sum.missing = true
-      sum.kg = (sum.kg ?? 0) + (c.kg ?? 0)
-      sum.t = (sum.t ?? 0) + (c.t ?? 0)
-      sum.packs = (sum.packs ?? 0) + (c.packs ?? 0)
-      if (rows.length === 1) { sum.totalSeedsM2 = c.totalSeedsM2; sum.kgDa = c.kgDa }
-    }
-    return sum
-  }
 
   // ---- избор ----
   const selected = plantings.filter((p) => sel.has(p.planting_id))
@@ -217,6 +228,41 @@ export default function SeedPlanning() {
     setBusy(false)
   }
 
+  // масово: МХЗ, кълняемост, кълняеми/м² (норма) за избраните БЗС с назначен сорт; празно поле = без промяна
+  const selSeedIds = selected.flatMap((p) => (seedsByPlanting.get(p.planting_id) ?? []).map((s) => s.planting_seed_id))
+  async function applyQuality() {
+    const patch: Record<string, number> = {}
+    const t = parseNum(qTkw), g = parseNum(qGerm), r = parseNum(qRate)
+    if (t != null) { if (!(t > 0)) return setError('МХЗ трябва да е число над 0.'); patch.tkw_g = t }
+    if (g != null) { if (!(g > 0 && g <= 100)) return setError('Кълняемостта трябва да е между 0 и 100 %.'); patch.germination_pct = g }
+    if (r != null) { if (!(r > 0)) return setError('Нормата трябва да е число над 0.'); patch.target_rate = r }
+    if (Object.keys(patch).length === 0 || selSeedIds.length === 0) return
+    setBusy(true); setMsg(null); setError(null)
+    const u = await supabase.from('planting_seed').update(patch).in('planting_seed_id', selSeedIds).select('planting_seed_id')
+    if (u.error) setError(u.error.message)
+    else { setMsg(`Качеството е зададено за ${u.data?.length ?? 0} реда семена.`); setQTkw(''); setQGerm(''); setQRate(''); await load() }
+    setBusy(false)
+  }
+  async function resetSelected(what: 'quality' | 'manual') {
+    if (selSeedIds.length === 0) return
+    setBusy(true); setMsg(null); setError(null)
+    const patch = what === 'quality' ? { tkw_g: null, germination_pct: null } : { rate_kg_da_manual: null }
+    const u = await supabase.from('planting_seed').update(patch).in('planting_seed_id', selSeedIds).select('planting_seed_id')
+    if (u.error) setError(u.error.message)
+    else { setMsg(what === 'quality' ? `МХЗ и кълняемостта се взимат от партидата/сорта за ${u.data?.length ?? 0} реда.` : `Върнати изчислените норми за ${u.data?.length ?? 0} реда.`); await load() }
+    setBusy(false)
+  }
+
+  // редакция в клетка (само за БЗС с един ред семена)
+  async function patchSeed(ps: PSeed, patch: Partial<PSeed>) {
+    setError(null)
+    const u = await supabase.from('planting_seed').update(patch).eq('planting_seed_id', ps.planting_seed_id).select('*')
+    if (u.error) { setError(u.error.message); return }
+    if (!u.data?.length) { setError('Не е записано – вероятно нямаш права за това БЗС.'); return }
+    const row = u.data[0] as PSeed
+    setPseeds((all) => all.map((s) => (s.planting_seed_id === row.planting_seed_id ? row : s)))
+  }
+
   async function undoImport() {
     if (!lastImport) return
     const when = new Date(lastImport.created_at).toLocaleString('bg-BG')
@@ -247,17 +293,20 @@ export default function SeedPlanning() {
     setBusy(false)
   }
 
-  // ---- суми ----
+  // ---- суми за показаните ----
   const totals = useMemo(() => {
-    let area = 0, t = 0, packs = 0
+    let area = 0, t = 0, packs = 0, value = 0, noPrice = 0
     for (const p of view) {
       area += p.planted_area_da ?? 0
-      const c = calcFor(p)
-      if (c) { t += c.t ?? 0; packs += c.packs ?? 0 }
+      const ls = linesByPlanting.get(p.planting_id)
+      const s = sumFor(ls)
+      if (!s || s.withOverage == null) continue
+      if (ls?.[0]?.unit === 'packs') packs += s.withOverage; else t += s.withOverage
+      if (s.value != null) value += s.value; else noPrice++
     }
-    return { area, t, packs }
+    return { area, t, packs, value, noPrice }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, seedsByPlanting, batchById, cropById])
+  }, [view, linesByPlanting])
 
   const isSolid = selCrop?.seeding_method === 'solid'
   const rateLabel = selCrop ? (isSolid ? 'Норма, кълняеми семена/м²' : 'Норма, семена/дка') : 'Норма'
@@ -265,21 +314,55 @@ export default function SeedPlanning() {
     if (!selCrop || !(Number(rate) > 0)) return null
     const b = batchId ? batchById.get(batchId) : undefined
     const area = selected.reduce((s, p) => s + (p.planted_area_da ?? 0), 0)
-    const c = calcRow(selCrop, { area_da: area, target_rate: Number(rate), overage_pct: null }, b, varietyId ? { ...(varById.get(varietyId) as Variety), seeds_per_pack: packSize > 0 ? packSize : (varById.get(varietyId)?.seeds_per_pack ?? null) } : undefined)
+    const v = varietyId ? varById.get(varietyId) : undefined
+    const c = calcRow(selCrop, { area_da: area, target_rate: Number(rate), overage_pct: null }, b, v ? { ...v, seeds_per_pack: packSize > 0 ? packSize : v.seeds_per_pack } : undefined)
     return { area, c }
   }, [selCrop, rate, batchId, selected, batchById, varietyId, packSize, varById])
+
+  // ---- клетки ----
+  const priceText = (p: SeedPrice) => `${fmtN(p.price, 2)} /${UNIT_TEXT[p.unit]}`
+  const priceTitle = (p: SeedPrice) => `${p.supplier ?? ''}${p.own ? ' · вътрешна цена' : ''}${p.offers && p.offers > 1 ? ` · ${p.offers} оферти` : ''}`
+  const qtyUnit = (packs: boolean) => <span className="muted"> {packs ? 'торби' : 'т'}</span>
+
+  function exportXlsx() {
+    const headers = ['БЗС', 'Фирма', 'Стопанска база', 'Култура', 'Площ, дка', 'Сорт / хибрид', 'Добавка', 'Размножение', 'Произход',
+      'МХЗ, г', 'Кълняемост, %', 'Кълняеми/м²', 'Семена/м²', 'Норма', 'Ед. норма', 'Ръчна норма', 'Преразход, %', 'Нужда', 'С преразход', 'Ед. количество',
+      'Доставчик', 'Цена EUR без ДДС', 'Ед. цена', 'Стойност EUR', 'EUR/дка']
+    const rows: Cell[][] = []
+    for (const p of view) {
+      const crop = cropById.get(p.crop_id)
+      const ls = linesByPlanting.get(p.planting_id) ?? []
+      const head: Cell[] = [p.field_name, p.company_name, p.farm_base_name, p.crop_name]
+      if (ls.length === 0 || !crop) { rows.push([...head, p.planted_area_da, ...Array(headers.length - 5).fill(null)]); continue }
+      for (const l of ls) {
+        const b = l.ps.batch_id ? batchById.get(l.ps.batch_id) : undefined
+        const kg = crop.order_unit === 'kg'
+        const solid = crop.seeding_method === 'solid'
+        const area = ls.length > 1 ? Number(l.ps.area_da) : p.planted_area_da
+        rows.push([...head, area,
+          varById.get(l.ps.variety_id)?.name ?? '', l.ps.addon ?? null, b?.reproduction_id != null ? reproById.get(b.reproduction_id) ?? null : null, l.ps.seed_origin,
+          l.calc.tkw, l.calc.germ, solid ? Number(l.ps.target_rate) : null, l.calc.totalSeedsM2,
+          kg ? l.calc.kgDa : solid ? l.calc.kgDaInfo : Number(l.ps.target_rate), kg ? 'кг/дка' : solid ? 'кг/дка (инф.)' : 'сем./дка',
+          l.calc.manual, l.calc.overagePct, l.need, l.withOverage, l.unit === 'packs' ? 'торби' : 'т',
+          l.price?.supplier ?? null, l.price?.price ?? null, l.price ? UNIT_TEXT[l.price.unit] : null, l.value,
+          l.value != null && area ? Math.round((l.value / Number(area)) * 100) / 100 : null])
+      }
+    }
+    downloadXlsx(`планиране_семена_${new Date().toISOString().slice(0, 10)}.xlsx`, 'Планиране семена', headers, rows)
+  }
 
   return (
     <>
       <div className="page-head">
         <h1>Планиране семена</h1>
         <span className="muted">
-          {loading ? 'Зареждане…' : `${view.length} от ${plantings.length} БЗС · ${fmtArea(totals.area)} дка · ${fmtArea(totals.t)} т · ${fmtInt(totals.packs)} торби`}
+          {loading ? 'Зареждане…' : `${view.length} от ${plantings.length} БЗС · ${fmtArea(totals.area)} дка · с преразход ${fmtN(totals.t, 2)} т и ${fmtN(totals.packs, 1)} торби · ${fmtN(totals.value, 2)} EUR${totals.noPrice ? ` (+ ${totals.noPrice} БЗС без цена)` : ''}`}
         </span>
       </div>
 
       {error && <div className="banner err" role="alert">Грешка: {error}</div>}
       {msg && <div className="banner" role="status" style={{ background: 'var(--ok-bg)', borderColor: 'var(--ok-strong-bg)', color: 'var(--ok-ink)' }}>{msg}</div>}
+      {!pricesOk && <div className="banner">Цените на семената не се заредиха – колоните с цени са празни.</div>}
 
       <div className="filters">
         <label className="field grow">Търсене (име на БЗС)
@@ -302,6 +385,7 @@ export default function SeedPlanning() {
           <button className="btn outline" disabled={busy} onClick={() => void undoImport()}
             title={`Последен импорт: ${new Date(lastImport.created_at).toLocaleString('bg-BG')} · ${lastImport.rows_applied} БЗС`}>Отмени последния импорт</button>
         )}
+        <button className="btn outline" onClick={exportXlsx} disabled={loading || view.length === 0}>Експорт в Excel</button>
       </div>
       {importOpen && (
         <SeedImport
@@ -316,52 +400,64 @@ export default function SeedPlanning() {
         <div className="card pad seed-toolbar">
           <strong>Избрани: {selected.length} БЗС · {fmtArea(selected.reduce((s, p) => s + (p.planted_area_da ?? 0), 0))} дка</strong>
           {selCrops.length > 1 ? (
-            <div className="banner">Избрани са различни култури. Избери БЗС само от една култура, за да им назначиш сорт.</div>
+            <div className="banner">Избрани са различни култури. Избери БЗС само от една култура, за да им назначиш сорт или качество.</div>
           ) : (
-            <div className="filters">
-              <label className="field">Сорт / хибрид
-                <select className="input" value={varietyId} onChange={(e) => { setVarietyId(e.target.value); setBatchId(''); setReproF(''); setPackInput('') }}>
-                  <option value="">— избери —</option>
-                  {cropVarieties.map((v) => <option key={v.variety_id} value={v.variety_id}>{v.name}</option>)}
-                </select>
-              </label>
-              <label className="field">Размножение
-                <select className="input" value={reproF} onChange={(e) => { setReproF(e.target.value); setBatchId('') }} disabled={!varietyId}>
-                  <option value="">— всички —</option>
-                  {reproOptions.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-                </select>
-              </label>
-              <label className="field grow">Партида (произход · МХЗ · кълняемост)
-                <select className="input" value={batchId} onChange={(e) => setBatchId(e.target.value)} disabled={!varietyId}>
-                  <option value="">Без партида</option>
-                  {shownBatches.map((b) => <option key={b.batch_id} value={b.batch_id}>{batchLabel(b, !reproF)}</option>)}
-                </select>
-              </label>
-              <label className="field">{rateLabel}
-                <input className="input num" inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value.replace(',', '.'))} />
-              </label>
-              {isPacks && (
-                <label className="field">Семена в торба
-                  <input className="input num" inputMode="numeric" value={packInput !== '' ? packInput : String(effectivePack || '')}
-                    onChange={(e) => setPackInput(e.target.value.replace(/\D/g, ''))} />
+            <>
+              <div className="filters">
+                <label className="field">Сорт / хибрид
+                  <select className="input" value={varietyId} onChange={(e) => { setVarietyId(e.target.value); setBatchId(''); setReproF(''); setPackInput('') }}>
+                    <option value="">— избери —</option>
+                    {cropVarieties.map((v) => <option key={v.variety_id} value={v.variety_id}>{v.name}</option>)}
+                  </select>
                 </label>
+                <label className="field">Размножение
+                  <select className="input" value={reproF} onChange={(e) => { setReproF(e.target.value); setBatchId('') }} disabled={!varietyId}>
+                    <option value="">— всички —</option>
+                    {reproOptions.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                  </select>
+                </label>
+                <label className="field grow">Партида (произход · МХЗ · кълняемост)
+                  <select className="input" value={batchId} onChange={(e) => setBatchId(e.target.value)} disabled={!varietyId}>
+                    <option value="">Без партида</option>
+                    {shownBatches.map((b) => <option key={b.batch_id} value={b.batch_id}>{batchLabel(b, !reproF)}</option>)}
+                  </select>
+                </label>
+                <label className="field">{rateLabel}
+                  <input className="input num" inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value.replace(',', '.'))} />
+                </label>
+                {isPacks && (
+                  <label className="field">Семена в торба
+                    <input className="input num" inputMode="numeric" value={packInput !== '' ? packInput : String(effectivePack || '')}
+                      onChange={(e) => setPackInput(e.target.value.replace(/\D/g, ''))} />
+                  </label>
+                )}
+                {isPacks && varietyId && (
+                  <button className="btn outline" disabled={busy || !(packSize > 0)} onClick={savePack}>Запази за хибрида</button>
+                )}
+                <button className="btn" disabled={busy || !varietyId || !(Number(rate) > 0)} onClick={apply}>Приложи сорта</button>
+                <button className="btn outline" disabled={busy} onClick={clearSeeds}>Изчисти семената</button>
+                <button className="btn outline" onClick={() => setSel(new Set())}>Откажи избора</button>
+              </div>
+              {preview && !preview.c.missing && (
+                <div className="muted">
+                  Преглед за избраните: {isSolid && preview.c.totalSeedsM2 != null ? `${fmtInt(preview.c.totalSeedsM2)} семена/м²` : ''}
+                  {preview.c.kgDa != null ? ` · ${fmtN(preview.c.kgDa, 0)} кг/дка · нужда ${fmtN(preview.c.needT, 2)} т, с преразход ${fmtN(preview.c.t, 2)} т` : ''}
+                  {preview.c.packs != null ? `${isSolid ? ' · ' : ''}нужда ${fmtN(preview.c.needPacks, 1)} торби, с преразход ${fmtN(preview.c.packs, 1)}` : ''}
+                </div>
               )}
-              {isPacks && varietyId && (
-                <button className="btn outline" disabled={busy || !(packSize > 0)} onClick={savePack}>Запази за хибрида</button>
-              )}
-              <button className="btn" disabled={busy || !varietyId || !(Number(rate) > 0)} onClick={apply}>Приложи</button>
-              <button className="btn outline" disabled={busy} onClick={clearSeeds}>Изчисти семената</button>
-              <button className="btn outline" onClick={() => setSel(new Set())}>Откажи избора</button>
-            </div>
+              {preview?.c.missing && <div className="muted">Няма нужните данни (кълняемост, МХЗ или семена в торба) – въведи ги по-долу или в сорта/партидата.</div>}
+
+              <div className="filters" style={{ borderTop: '1px solid var(--border, #e3e3e3)', paddingTop: 10 }}>
+                <span className="muted" style={{ alignSelf: 'center' }}>Качество за избраните ({selSeedIds.length} реда със сорт); празно = без промяна:</span>
+                <label className="field">МХЗ, г<input className="input num" inputMode="decimal" value={qTkw} onChange={(e) => setQTkw(e.target.value)} /></label>
+                <label className="field">Кълняемост, %<input className="input num" inputMode="decimal" value={qGerm} onChange={(e) => setQGerm(e.target.value)} /></label>
+                <label className="field">{isSolid ? 'Кълняеми/м²' : 'Норма, сем./дка'}<input className="input num" inputMode="decimal" value={qRate} onChange={(e) => setQRate(e.target.value)} /></label>
+                <button className="btn" disabled={busy || selSeedIds.length === 0 || (!qTkw.trim() && !qGerm.trim() && !qRate.trim())} onClick={() => void applyQuality()}>Задай качеството</button>
+                <button className="btn outline" disabled={busy || selSeedIds.length === 0} onClick={() => void resetSelected('quality')} title="МХЗ и кълняемост отново от партидата, иначе от сорта">МХЗ/кълняемост по подразбиране</button>
+                {selCrop?.order_unit === 'kg' && <button className="btn outline" disabled={busy || selSeedIds.length === 0} onClick={() => void resetSelected('manual')}>Върни изчислените норми</button>}
+              </div>
+            </>
           )}
-          {preview && !preview.c.missing && (
-            <div className="muted">
-              Преглед за избраните: {isSolid && preview.c.totalSeedsM2 != null ? `${fmtInt(preview.c.totalSeedsM2)} общи семена/м²` : ''}
-              {preview.c.kgDa != null ? ` · ${fmtInt(preview.c.kgDa)} кг/дка · ${fmtArea(preview.c.t)} т` : ''}
-              {preview.c.packs != null ? `${isSolid ? ' · ' : ''}${fmtInt(Math.ceil(preview.c.packs))} торби` : ''}
-            </div>
-          )}
-          {preview?.c.missing && <div className="muted">За тази партида няма нужните данни (кълняемост, МХЗ или семена в торба), затова количествата не се смятат.</div>}
         </div>
       )}
 
@@ -371,10 +467,13 @@ export default function SeedPlanning() {
             <tr>
               <th style={{ width: 36 }}><input type="checkbox" aria-label="Избери всички показани" checked={allShownSelected} onChange={toggleAll} /></th>
               <th>Наименование<ColumnPicker items={pickerItems} hidden={colPrefs.hidden} onToggle={colPrefs.toggle} onShowAll={colPrefs.showAll} /></th>
-              {vis('company') && <th>Фирма</th>}{vis('crop') && <th>Култура</th>}{vis('area') && <th className="num">Площ, дка</th>}
+              {vis('company') && <th>Фирма</th>}{vis('base') && <th>База</th>}{vis('crop') && <th>Култура</th>}{vis('area') && <th className="num">Площ, дка</th>}
               {vis('variety') && <th>Сорт / хибрид</th>}{vis('repro') && <th>Размножение</th>}{vis('origin') && <th>Произход</th>}
-              {vis('rate') && <th className="num">Норма</th>}{vis('total') && <th className="num">Общи сем./м²</th>}{vis('kgda') && <th className="num">кг/дка</th>}
-              {vis('kg') && <th className="num">кг общо</th>}{vis('t') && <th className="num">Тона</th>}{vis('packs') && <th className="num">Торби</th>}
+              {vis('tkw') && <th className="num" title="Маса на 1000 семена">МХЗ, г</th>}{vis('germ') && <th className="num">Кълн., %</th>}
+              {vis('gsm') && <th className="num" title="Кълняеми семена/м² (норма за житни и рапица)">Кълн./м²</th>}{vis('seeds') && <th className="num" title="Брой семена/м² = CEILING(кълняеми ÷ кълняемост)">Сем./м²</th>}
+              {vis('rate') && <th className="num">Норма</th>}
+              {vis('need') && <th className="num" title="Без преразход">Нужда</th>}{vis('withov') && <th className="num" title="Нужда × (1 + преразход %) – от нея е заявката">С преразход</th>}
+              {vis('price') && <th className="num" title="Избраната оферта за сорта и сезона">Цена</th>}{vis('value') && <th className="num" title="С преразход × цена">Стойност EUR</th>}{vis('eurda') && <th className="num">EUR/дка</th>}
             </tr>
           </thead>
           <tbody>
@@ -383,29 +482,74 @@ export default function SeedPlanning() {
               const r0 = rows[0]
               const crop = cropById.get(p.crop_id)
               const b0 = r0?.batch_id ? batchById.get(r0.batch_id) : undefined
-              const c = calcFor(p)
+              const ls = linesByPlanting.get(p.planting_id)
+              const l0 = ls?.[0]
+              const c = l0?.calc
+              const s = sumFor(ls)
+              const single = rows.length === 1
+              const solid = crop?.seeding_method === 'solid'
+              const kg = crop?.order_unit === 'kg'
+              const packs = l0?.unit === 'packs'
+              const v0 = r0 ? varById.get(r0.variety_id) : undefined
+              const dflt = (field: 'tkw_g' | 'germination_pct') => {
+                const bv = b0?.[field]; const vv = v0?.[field]
+                return bv != null ? `партида: ${fmtMaybe(bv)}` : vv != null ? `сорт: ${fmtMaybe(vv)}` : 'няма стойност по подразбиране'
+              }
+              const qualityCell = (field: 'tkw_g' | 'germination_pct', val: number | null | undefined, src: Source) => (
+                <EditCell value={r0?.[field] ?? null} label={field === 'tkw_g' ? 'МХЗ' : 'Кълняемост'} disabled={!single}
+                  title={src ? `${SRC_TEXT[src]}${src === 'bzs' ? ` (по подразбиране – ${dflt(field)}); празно връща подразбиращата се` : ''}` : dflt(field)}
+                  display={val == null ? '' : <span className={src === 'bzs' ? 'own-val' : undefined}>{fmtMaybe(val)}</span>}
+                  onSave={(v) => patchSeed(r0, { [field]: v } as Partial<PSeed>)} />
+              )
+              const price = l0?.price
+              const sameVariety = !!ls && ls.every((l) => l.ps.variety_id === l0?.ps.variety_id)
               return (
                 <tr key={p.planting_id} className={`row ${sel.has(p.planting_id) ? 'open' : ''}`} onClick={() => toggle(p.planting_id)}>
                   <td onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={sel.has(p.planting_id)} onChange={() => toggle(p.planting_id)} aria-label={`Избери ${p.field_name}`} /></td>
                   <td><span className="name">{p.field_name}</span></td>
                   {vis('company') && (<td>{p.company_name ?? <span className="empty">—</span>}</td>)}
+                  {vis('base') && (<td>{p.farm_base_name ?? <span className="empty">—</span>}</td>)}
                   {vis('crop') && (<td><span className="crop crop-main"><span className="dot" style={{ background: cropColor(p.crop_name) }} />{cropLabel(p.crop_name)}</span></td>)}
                   {vis('area') && (<td className="num">{fmtArea(p.planted_area_da)}</td>)}
-                  {vis('variety') && (<td>{r0 ? <>{varById.get(r0.variety_id)?.name ?? '—'}{r0.addon ? <span className="muted"> + {r0.addon}</span> : null}{rows.length > 1 && <> <span className="chip">+{rows.length - 1}</span></>}</> : <span className="empty">—</span>}</td>)}
+                  {vis('variety') && (<td>{r0 ? <>{v0?.name ?? '—'}{r0.addon ? <span className="muted"> + {r0.addon}</span> : null}{rows.length > 1 && <> <span className="chip" title="Няколко сорта на това БЗС – редакцията в клетка е само за БЗС с един сорт">+{rows.length - 1}</span></>}</> : <span className="empty">—</span>}</td>)}
                   {vis('repro') && (<td>{r0 && b0?.reproduction_id != null && reproById.get(b0.reproduction_id) ? reproById.get(b0.reproduction_id) : <span className="empty">—</span>}</td>)}
                   {vis('origin') && (<td>{r0?.seed_origin ?? <span className="empty">—</span>}</td>)}
-                  {vis('rate') && (<td className="num">{r0 ? fmtInt(r0.target_rate) : ''}{r0 && crop ? <span className="muted"> {crop.seeding_method === 'solid' ? 'к.с./м²' : 'сем./дка'}</span> : ''}</td>)}
-                  {vis('total') && (<td className="num">{c?.totalSeedsM2 != null ? fmtInt(c.totalSeedsM2) : ''}</td>)}
-                  {vis('kgda') && (<td className="num">{c?.kgDa != null ? fmtInt(c.kgDa) : ''}</td>)}
-                  {vis('kg') && (<td className="num">{c?.kg != null && c.kg > 0 && !c.missing ? fmtInt(c.kg) : ''}</td>)}
-                  {vis('t') && (<td className="num">{c?.kg != null && c.kg > 0 && !c.missing ? fmtArea(c.t) : (c?.missing ? <span className="chip warn">липсват данни</span> : '')}</td>)}
-                  {vis('packs') && (<td className="num">{c && (c.packs ?? 0) > 0 && !c.missing ? fmtInt(Math.ceil(c.packs ?? 0)) : ''}</td>)}
+                  {vis('tkw') && (<td className="num" onClick={(e) => e.stopPropagation()}>{r0 ? qualityCell('tkw_g', c?.tkw, c?.tkwSource ?? null) : ''}</td>)}
+                  {vis('germ') && (<td className="num" onClick={(e) => e.stopPropagation()}>{r0 ? qualityCell('germination_pct', c?.germ, c?.germSource ?? null) : ''}</td>)}
+                  {vis('gsm') && (<td className="num" onClick={(e) => e.stopPropagation()}>{r0 && solid
+                    ? <EditCell value={Number(r0.target_rate)} label="Кълняеми семена/м²" disabled={!single} display={fmtN(Number(r0.target_rate), 0)} onSave={async (v) => { if (v != null) await patchSeed(r0, { target_rate: v }) }} />
+                    : ''}</td>)}
+                  {vis('seeds') && (<td className="num">{single && c?.totalSeedsM2 != null ? fmtN(c.totalSeedsM2, 0) : ''}</td>)}
+                  {vis('rate') && (<td className="num" onClick={(e) => e.stopPropagation()}>{!r0 || !crop ? '' : !single ? <span className="muted">няколко</span>
+                    : kg ? (
+                      c?.kgDa == null ? <span className="chip warn" title="Въведи МХЗ и кълняемост (или ръчна норма)">липсват данни</span> : (
+                        <>
+                          <EditCell value={c.manual ? c.kgDa : null} label="Ръчна норма кг/дка"
+                            title={c.manual ? `Ръчна норма; изчислената е ${fmtMaybe(c.kgDaCalc)} кг/дка` : 'Изчислена; въведи стойност за ръчна норма (1 знак)'}
+                            display={<span className={c.manual ? 'manual manual-bg' : undefined}>{c.manual ? fmtN(c.kgDa, 1) : fmtN(c.kgDa, 0)}</span>}
+                            onSave={(v) => patchSeed(r0, { rate_kg_da_manual: v == null ? null : round1(v) })} />
+                          <span className="muted"> кг/дка</span>
+                          {c.manual && <button className="reset-btn" title={`Върни изчислената (${c.kgDaCalc == null ? 'няма данни' : fmtMaybe(c.kgDaCalc)})`} aria-label="Върни изчислената норма" onClick={() => void patchSeed(r0, { rate_kg_da_manual: null })}>↺</button>}
+                        </>
+                      ))
+                    : solid ? (c?.kgDaInfo != null ? <span title="Само за информация – количеството се смята в торби през семената">{fmtN(c.kgDaInfo, 2)}<span className="muted"> кг/дка (инф.)</span></span> : <span className="chip warn" title="Въведи МХЗ и кълняемост">липсват данни</span>)
+                    : <><EditCell value={Number(r0.target_rate)} label="Норма семена/дка" display={fmtN(Number(r0.target_rate), 0)} onSave={async (v) => { if (v != null) await patchSeed(r0, { target_rate: v }) }} /><span className="muted"> сем./дка</span></>}
+                  </td>)}
+                  {vis('need') && (<td className="num">{s?.need != null ? <>{fmtQ(s.need, packs)}{qtyUnit(packs)}</> : ''}</td>)}
+                  {vis('withov') && (<td className="num" title={c ? `Преразход ${fmtMaybe(c.overagePct)} %` : undefined}>{s?.withOverage != null ? <>{fmtQ(s.withOverage, packs)}{qtyUnit(packs)}</> : (s?.missing ? <span className="chip warn">липсват данни</span> : '')}</td>)}
+                  {vis('price') && (<td className="num">{!l0 ? '' : price && sameVariety ? <span title={priceTitle(price)}>{priceText(price)}</span> : <span className="chip warn" title="Няма избрана оферта за сорта и сезона (Планиране семена → Оферти)">—</span>}</td>)}
+                  {vis('value') && (<td className="num">{!l0 ? '' : s?.mismatch ? <span className="chip warn" title="Цената е за торба, а количеството е в т (или обратно) – не се превръща">мерна единица</span> : s?.value != null ? fmtN(s.value, 2) : s?.noPrice ? '—' : ''}</td>)}
+                  {vis('eurda') && (<td className="num">{s?.value != null && (p.planted_area_da ?? 0) > 0 ? fmtN(s.value / (p.planted_area_da as number), 2) : ''}</td>)}
                 </tr>
               )
             })}
             {!loading && view.length === 0 && <tr><td colSpan={shownCols} className="empty">Няма БЗС по тези филтри.</td></tr>}
           </tbody>
         </table>
+      </div>
+      <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+        МХЗ, кълняемост и нормата се променят с клик в клетката. <span className="own-val">Синьо с пунктир</span> = въведено за това БЗС (празно връща стойността от партидата/сорта).
+        {' '}<span className="manual manual-bg">Синя норма</span> = ръчна; ↺ връща изчислената. Торби с 1 знак, тонове с 2 знака; заявката е от „С преразход“.
       </div>
     </>
   )
