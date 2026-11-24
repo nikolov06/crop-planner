@@ -1,4 +1,4 @@
--- СУХА ПРОБА (ROLLBACK) на 20261125120000_seed_quality_offers.sql.
+-- СУХА ПРОБА (ROLLBACK) на migrations/20261125120000_seed_quality_offers.sql.
 -- Пуска се от корена на проекта:
 --   psql "$(cat supabase/.temp/pooler-url)" -f supabase/pending/20261125120000_seed_quality_offers_dry.sql
 -- Спира при първата грешка; при успех накрая пише „ПРОБАТА Е УСПЕШНА“ и връща всичко (ROLLBACK).
@@ -15,7 +15,7 @@ create temp table _cols_before as
    where table_schema = 'public' and table_name in ('v_seed_calc', 'v_seed_need', 'v_product_price_effective');
 
 -- ---------- Миграцията ----------
-\ir 20261125120000_seed_quality_offers.sql
+\ir ../migrations/20261125120000_seed_quality_offers.sql
 
 -- ---------- 1. v_seed_need е същият като преди (Сеитбооборот не се променя) ----------
 \echo

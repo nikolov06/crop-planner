@@ -12,3 +12,4 @@ import_*.sql
 env.local.txt
 *.xlsx
 geom/
+supabase/imports/
