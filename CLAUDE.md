@@ -50,6 +50,8 @@ Crop Planner е уеб приложение за планиране на зем�
 - `20261118150000_bzs_legal_area.sql` (`field_crop_year.legal_area_dka`, `buffer_strip_dka` – преименувана от `buffer_area_da`, `area_wo_buffer_dka` GENERATED; `v_rotation_list` с площите; функция `set_bzs_legal_areas`)
 - `20261118160000_company_name_cyrillic.sql` (латински букви в имената на фирмите → кирилица)
 - `20261118170000_recap_eco_schemes.sql` (`company.in_holding`; номенклатури `recap_crop_group` и `eco_scheme_rule` с RLS като `crop`/`season`; изгледи `v_recap_company_crop`, `v_recap_base_crop`)
+- `20261124120000_seed_import.sql` (импорт на сортове: `planting_seed.addon`, `variety.default_rate`, `variety_alias`, лог `seed_import`/`seed_import_item`, RPC `apply_seed_import` и `undo_seed_import`)
+- `20261125120000_seed_quality_offers.sql` (МХЗ и кълняемост в `variety` и `planting_seed`; `planting_seed.rate_kg_da_manual`; `v_seed_calc` с нови колони накрая – `need_t_base`, `packs_base`, `rate_kg_da_info` и др.; `supplier.is_own_production` с „Собствено производство“; оферти за семена – `offer.module = 'seed'`, `offer_line.variety_id`, `min_qty`, мерна единица `pack`; изглед `v_seed_price_selected`)
 
 Типът за геометрия е `extensions.geometry`.
 
