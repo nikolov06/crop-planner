@@ -291,3 +291,14 @@ table.grid.rot tr.filter-row th:nth-child(2) { background: var(--surface-subtle)
 table.grid.rot tr.row:hover td:nth-child(2) { background: var(--surface-subtle); }
 table.grid.rot tr.open td:nth-child(2) { background: #f1f5f2; }
 table.grid.rot tr.detail td:first-child { position: static; width: auto; min-width: 0; max-width: none; padding: 16px 12px 16px 44px; white-space: normal; }
+/* Подраздели вътре в екран (напр. Оферти: Сравнение по сорт | Списък оферти) */
+.subtabs { display: flex; gap: 8px; margin: 4px 0 12px; flex-wrap: wrap; }
+/* Семена: ръчна стойност (норма или качество за БЗС) и липсваща цена */
+.manual { color: #2949a6; font-weight: 600; }
+.manual-bg { background: #e8f0ff; border-radius: var(--radius-sm); padding: 1px 5px; }
+.own-val { border-bottom: 1px dashed #2949a6; color: #2949a6; }
+.reset-btn { border: 0; background: none; color: #2949a6; cursor: pointer; font: inherit; padding: 0 2px; }
+table.grid td.num input.cell-in { width: 72px; text-align: right; min-height: 26px; padding: 0 4px; }
+tr.lvl-total td { background: var(--surface-subtle); font-weight: 700; border-top: 2px solid var(--border, #ccc); }
+tr.lvl-base td { background: #e6eee8; font-weight: 700; }
+tr.lvl-crop td { background: #f3f7f4; font-weight: 600; }

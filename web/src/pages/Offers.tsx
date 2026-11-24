@@ -4,22 +4,29 @@ import { useConfirm } from '../lib/confirm'
 import { downloadXlsx } from '../lib/xlsx'
 import { MultiFilter, anyToken } from '../lib/multifilter'
 
-// Оферти от доставчици за ПРЗ и торове: регистриране, редакция, статус, основна цена по продукт.
-export type Module = 'prz' | 'fert'
-type Sup = { supplier_id: string; organization_id: string; name: string; eik: string | null; is_active: boolean }
+// Оферти от доставчици за ПРЗ, торове и семена: регистриране, редакция, статус, основна/избрана цена по продукт.
+// При семената планът ползва САМО избраната оферта (без резервна най-ниска цена).
+export type Module = 'prz' | 'fert' | 'seed'
+type Sup = { supplier_id: string; organization_id: string; name: string; eik: string | null; is_active: boolean; is_own_production?: boolean }
 type Offer = { offer_id: string; organization_id: string; season_id: number; module: Module; supplier_id: string; offer_no: string | null; offer_date: string; valid_until: string | null; status: Status; note: string | null }
-type Line = { offer_line_id: string; offer_id: string; prz_product_id: string | null; fertilizer_product_id: string | null; price: number; price_unit: Unit; is_preferred: boolean; note: string | null }
+type Line = { offer_line_id: string; offer_id: string; prz_product_id: string | null; fertilizer_product_id: string | null; variety_id?: string | null; price: number; price_unit: Unit; is_preferred: boolean; min_qty?: number | null; note: string | null }
 type Status = 'received' | 'accepted' | 'rejected'
-type Unit = 'l' | 'kg' | 't'
+type Unit = 'l' | 'kg' | 't' | 'pack'
 type Prod = { id: string; name: string; sub: string; form?: string }
 type Season = { season_id: number; label: string; is_current: boolean }
-type Draft = { key: string; line_id?: string; product_id: string; price: string; unit: Unit; pref: boolean }
+type Draft = { key: string; line_id?: string; product_id: string; price: string; unit: Unit; pref: boolean; min: string }
 
 const PAGE = 1000
 const STATUS: Record<Status, string> = { received: 'Получена', accepted: 'Приета', rejected: 'Отхвърлена' }
 const fmtP = (n: number) => n.toLocaleString('bg-BG', { minimumFractionDigits: 2, maximumFractionDigits: 4 })
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim()
 const perBase = (price: number, unit: Unit) => (unit === 't' ? price / 1000 : price)
+// торба не се сравнява с маса: най-ниската цена се търси отделно за торби и за кг/т/л
+const unitClass = (u: Unit) => (u === 'pack' ? 'pack' : 'mass')
+const UNIT_TEXT: Record<Unit, string> = { l: 'л', kg: 'кг', t: 'т', pack: 'торба' }
+const MODULE_TEXT: Record<Module, string> = { prz: 'ПРЗ', fert: 'торове', seed: 'семена' }
+const COL: Record<Module, 'prz_product_id' | 'fertilizer_product_id' | 'variety_id'> = { prz: 'prz_product_id', fert: 'fertilizer_product_id', seed: 'variety_id' }
+const fmtMin = (n: number | null | undefined) => (n == null ? '' : n.toLocaleString('bg-BG', { maximumFractionDigits: 2 }))
 let seq = 0
 const nk = () => `k${++seq}`
 
@@ -37,6 +44,8 @@ async function fetchAll<T>(build: (from: number, to: number) => PromiseLike<{ da
 
 export default function Offers({ module }: { module: Module }) {
   const isPrz = module === 'prz'
+  const isSeed = module === 'seed'
+  const col = COL[module]
   const [seasons, setSeasons] = useState<Season[]>([])
   const [seasonId, setSeasonId] = useState<number | null>(null)
   const [sups, setSups] = useState<Sup[]>([])
@@ -53,6 +62,7 @@ export default function Offers({ module }: { module: Module }) {
   const [edit, setEdit] = useState<null | { offer: Offer | null }>(null)
   const [supOpen, setSupOpen] = useState(false)
   const [reload, setReload] = useState(0)
+  const [tab, setTab] = useState<'compare' | 'list'>(module === 'seed' ? 'compare' : 'list')
 
   // еднократно: сезони и каталог
   useEffect(() => {
@@ -62,7 +72,17 @@ export default function Offers({ module }: { module: Module }) {
         const s = await supabase.from('season').select('season_id,label,is_current').order('year_end', { ascending: false })
         if (s.error) throw new Error(s.error.message)
         const list = (s.data ?? []) as Season[]
-        const cat: Prod[] = isPrz
+        const cat: Prod[] = isSeed
+          ? await (async () => {
+              const cr = await fetchAll<{ crop_id: string; name_bg: string; order_unit: string | null }>((f, t) =>
+                supabase.from('crop').select('crop_id,name_bg,order_unit').not('seeding_method', 'is', null).range(f, t))
+              const cm = new Map(cr.map((c) => [c.crop_id, c]))
+              return (await fetchAll<{ variety_id: string; crop_id: string; name: string }>((f, t) =>
+                supabase.from('variety').select('variety_id,crop_id,name').eq('is_active', true).order('name').order('variety_id').range(f, t)))
+                .filter((v) => cm.has(v.crop_id))
+                .map((v) => ({ id: v.variety_id, name: v.name, sub: cm.get(v.crop_id)?.name_bg ?? '', form: cm.get(v.crop_id)?.order_unit === 'packs' ? 'packs' : 'kg' }))
+            })()
+          : isPrz
           ? (await fetchAll<{ prz_product_id: string; trade_name: string; active_substances: string | null }>((f, t) =>
               supabase.from('prz_product').select('prz_product_id,trade_name,active_substances').eq('is_active', true).order('trade_name').order('prz_product_id').range(f, t)))
               .map((x) => ({ id: x.prz_product_id, name: x.trade_name, sub: x.active_substances ?? '' }))
@@ -75,7 +95,7 @@ export default function Offers({ module }: { module: Module }) {
       } catch (e) { if (!off) setError((e as Error).message) }
     })()
     return () => { off = true }
-  }, [isPrz])
+  }, [isPrz, isSeed])
 
   useEffect(() => {
     if (seasonId == null) return
@@ -86,18 +106,18 @@ export default function Offers({ module }: { module: Module }) {
         const su = await fetchAll<Sup>((f, t) => supabase.from('supplier').select('*').order('name').range(f, t))
         const of = await fetchAll<Offer>((f, t) => supabase.from('offer').select('*').eq('season_id', seasonId).eq('module', module).order('offer_date', { ascending: false }).order('offer_id').range(f, t))
         const ln = await fetchAll<Line>((f, t) => supabase.from('offer_line').select('*').eq('season_id', seasonId)
-          .not(isPrz ? 'prz_product_id' : 'fertilizer_product_id', 'is', null).order('offer_line_id').range(f, t))
+          .not(col, 'is', null).order('offer_line_id').range(f, t))
         if (off) return
         setSups(su); setOffers(of); setLines(ln); setError(null)
       } catch (e) { if (!off) setError((e as Error).message) }
       if (!off) setLoading(false)
     })()
     return () => { off = true }
-  }, [seasonId, module, isPrz, reload])
+  }, [seasonId, module, col, reload])
 
   const supName = useMemo(() => new Map(sups.map((s) => [s.supplier_id, s.name])), [sups])
   const prodById = useMemo(() => new Map(prods.map((p) => [p.id, p])), [prods])
-  const pid = (l: Line) => (isPrz ? l.prz_product_id : l.fertilizer_product_id) ?? ''
+  const pid = (l: Line) => (l[col] ?? '') as string
   const linesBy = useMemo(() => {
     const m = new Map<string, Line[]>()
     for (const l of lines) { const a = m.get(l.offer_id) ?? []; a.push(l); m.set(l.offer_id, a) }
@@ -107,7 +127,7 @@ export default function Offers({ module }: { module: Module }) {
   const rejected = useMemo(() => new Set(offers.filter((o) => o.status === 'rejected').map((o) => o.offer_id)), [offers])
   const minBy = useMemo(() => {
     const m = new Map<string, number>()
-    for (const l of lines) { if (rejected.has(l.offer_id)) continue; const v = perBase(l.price, l.price_unit); const k = pid(l); if (!m.has(k) || v < (m.get(k) as number)) m.set(k, v) }
+    for (const l of lines) { if (rejected.has(l.offer_id)) continue; const v = perBase(l.price, l.price_unit); const k = `${pid(l)}|${unitClass(l.price_unit)}`; if (!m.has(k) || v < (m.get(k) as number)) m.set(k, v) }
     return m
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lines, rejected])
@@ -130,16 +150,16 @@ export default function Offers({ module }: { module: Module }) {
   function exportXlsx() {
     const rows: (string | number | boolean | null)[][] = []
     for (const o of offers) for (const l of linesBy.get(o.offer_id) ?? []) {
-      rows.push([seasonLabel, o.offer_date, o.offer_no, supName.get(o.supplier_id) ?? '', STATUS[o.status], o.valid_until, prodById.get(pid(l))?.name ?? '', l.price, l.price_unit === 't' ? 'евро/т' : l.price_unit === 'kg' ? 'евро/кг' : 'евро/л', l.is_preferred, o.note])
+      rows.push([seasonLabel, o.offer_date, o.offer_no, supName.get(o.supplier_id) ?? '', STATUS[o.status], o.valid_until, prodById.get(pid(l))?.name ?? '', l.price, `евро/${UNIT_TEXT[l.price_unit]}`, l.min_qty ?? null, l.is_preferred, o.note])
     }
-    downloadXlsx(`оферти_${isPrz ? 'ПРЗ' : 'торове'}_${seasonLabel.replace('/', '-')}.xlsx`, 'Оферти', ['Сезон', 'Дата', '№ оферта', 'Доставчик', 'Статус', 'Валидна до', 'Продукт', 'Цена', 'Единица', 'Основна', 'Бележка'], rows)
+    downloadXlsx(`оферти_${MODULE_TEXT[module]}_${seasonLabel.replace('/', '-')}.xlsx`, 'Оферти', ['Сезон', 'Дата', '№ оферта', 'Доставчик', 'Статус', 'Валидна до', isSeed ? 'Сорт / хибрид' : 'Продукт', 'Цена без ДДС', 'Единица', 'Мин. количество', isSeed ? 'Избрана' : 'Основна', 'Бележка'], rows)
   }
   const done = (m: string) => { setEdit(null); setFlash(m); setReload((r) => r + 1) }
 
   return (
     <>
       <div className="page-head">
-        <h1>Оферти · {isPrz ? 'ПРЗ' : 'торове'}</h1>
+        <h1>{isSeed ? 'Планиране семена → Оферти' : `Оферти · ${MODULE_TEXT[module]}`}</h1>
         <span className="muted">{loading ? 'Зареждане…' : `${view.length} от ${offers.length} оферти · ${lines.length} реда`}</span>
       </div>
       {error && <div className="banner err" role="alert">{error}</div>}
@@ -151,7 +171,7 @@ export default function Offers({ module }: { module: Module }) {
             {seasons.map((s) => <option key={s.season_id} value={s.season_id}>{s.label}{s.is_current ? ' (текущ)' : ''}</option>)}
           </select>
         </label>
-        <label className="field grow">Търсене (доставчик, №, продукт)
+        <label className="field grow">{isSeed ? 'Търсене (доставчик, №, сорт)' : 'Търсене (доставчик, №, продукт)'}
           <input className="input" type="search" value={q} onChange={(e) => setQ(e.target.value)} />
         </label>
         <label className="field">Доставчик
@@ -165,7 +185,24 @@ export default function Offers({ module }: { module: Module }) {
         <button className="btn" onClick={() => setEdit({ offer: null })} disabled={seasonId == null}>+ Нова оферта</button>
       </div>
 
-      <div className="card">
+      {isSeed && (
+        <div className="subtabs" role="tablist">
+          <button role="tab" aria-selected={tab === 'compare'} className={`btn ${tab === 'compare' ? '' : 'outline'}`} onClick={() => setTab('compare')}>Сравнение по сорт</button>
+          <button role="tab" aria-selected={tab === 'list'} className={`btn ${tab === 'list' ? '' : 'outline'}`} onClick={() => setTab('list')}>Списък оферти</button>
+        </div>
+      )}
+      {isSeed && tab === 'compare' && (
+        <SeedCompare offers={offers.filter((o) => view.includes(o))} lines={lines} supName={supName} prodById={prodById} q={q}
+          onPick={async (l) => {
+            setError(null)
+            const r = await supabase.from('offer_line').update({ is_preferred: !l.is_preferred }).eq('offer_line_id', l.offer_line_id).select('offer_line_id')
+            if (r.error) setError(r.error.message)
+            else if (!r.data?.length) setError('Не е записано – вероятно нямате права.')
+            else setReload((x) => x + 1)
+          }} />
+      )}
+
+      <div className="card" hidden={isSeed && tab !== 'list'}>
         <table className="grid">
           <thead>
             <tr><th>Дата</th><th>№</th><th>Доставчик</th><th>Валидна до</th><th className="num">Редове</th><th>Статус</th><th /></tr>
@@ -190,21 +227,22 @@ export default function Offers({ module }: { module: Module }) {
                   {open && (
                     <tr className="detail"><td colSpan={7}>
                       <table className="grid">
-                        <thead><tr><th>Продукт</th><th className="num">Цена</th><th>Единица</th><th>Основна</th><th>Спрямо най-ниската</th></tr></thead>
+                        <thead><tr><th>{isSeed ? 'Сорт / хибрид' : 'Продукт'}</th><th className="num">Цена</th><th>Единица</th>{isSeed && <th className="num">Мин. кол.</th>}<th>{isSeed ? 'Избрана' : 'Основна'}</th><th>Спрямо най-ниската</th></tr></thead>
                         <tbody>
                           {ls.map((l) => {
-                            const mn = minBy.get(pid(l)); const v = perBase(l.price, l.price_unit)
+                            const mn = minBy.get(`${pid(l)}|${unitClass(l.price_unit)}`); const v = perBase(l.price, l.price_unit)
                             return (
                               <tr key={l.offer_line_id}>
                                 <td>{prodById.get(pid(l))?.name ?? '—'}</td>
                                 <td className="num">{fmtP(l.price)}</td>
-                                <td>евро/{l.price_unit === 't' ? 'т' : l.price_unit === 'kg' ? 'кг' : 'л'}</td>
+                                <td>евро/{UNIT_TEXT[l.price_unit]}</td>
+                                {isSeed && <td className="num">{fmtMin(l.min_qty)}</td>}
                                 <td>{l.is_preferred ? '✓' : ''}</td>
                                 <td>{mn == null || rejected.has(o.offer_id) ? '' : v <= mn + 1e-9 ? 'най-ниска' : `+${(((v / mn) - 1) * 100).toFixed(1)}%`}</td>
                               </tr>
                             )
                           })}
-                          {ls.length === 0 && <tr><td colSpan={5} className="empty">Няма редове.</td></tr>}
+                          {ls.length === 0 && <tr><td colSpan={isSeed ? 6 : 5} className="empty">Няма редове.</td></tr>}
                         </tbody>
                       </table>
                       {o.note && <div className="muted" style={{ marginTop: 6 }}>{o.note}</div>}
@@ -237,7 +275,7 @@ function ProductPick({ value, prods, onChange, taken }: { value: string; prods: 
   const list = open ? prods.filter((p) => !n || norm(p.name).includes(n) || norm(p.sub).includes(n)).slice(0, 30) : []
   return (
     <span style={{ position: 'relative', display: 'block' }}>
-      <input className="input fi" placeholder="Продукт…" value={text} aria-label="Продукт"
+      <input className="input fi" placeholder="Търси…" value={text} aria-label="Продукт"
         onChange={(e) => { setText(e.target.value); setOpen(true); if (value) onChange('') }}
         onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)} />
       {open && list.length > 0 && (
@@ -260,12 +298,17 @@ function OfferModal({ module, seasonId, offer, sups, prods, lines, pid, onClose,
   onClose: () => void; onDone: (m: string) => void; onSuppliers: () => void
 }) {
   const isPrz = module === 'prz'
-  const defUnit = (id: string): Unit => (isPrz ? 'l' : prods.find((p) => p.id === id)?.form === 'liquid' ? 'l' : 't')
+  const isSeed = module === 'seed'
+  const defUnit = (id: string): Unit => {
+    const form = prods.find((p) => p.id === id)?.form
+    if (isSeed) return form === 'packs' ? 'pack' : 't'
+    return isPrz ? 'l' : form === 'liquid' ? 'l' : 't'
+  }
   const [h, setH] = useState({
     supplier: offer?.supplier_id ?? '', no: offer?.offer_no ?? '', date: offer?.offer_date ?? new Date().toISOString().slice(0, 10),
     until: offer?.valid_until ?? '', status: (offer?.status ?? 'received') as Status, note: offer?.note ?? '',
   })
-  const [rows, setRows] = useState<Draft[]>(() => lines.map((l) => ({ key: nk(), line_id: l.offer_line_id, product_id: pid(l), price: String(l.price), unit: l.price_unit, pref: l.is_preferred })))
+  const [rows, setRows] = useState<Draft[]>(() => lines.map((l) => ({ key: nk(), line_id: l.offer_line_id, product_id: pid(l), price: String(l.price), unit: l.price_unit, pref: l.is_preferred, min: l.min_qty != null ? String(l.min_qty) : '' })))
   const [paste, setPaste] = useState('')
   const [pasteMsg, setPasteMsg] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -286,8 +329,10 @@ function OfferModal({ module, seasonId, offer, sups, prods, lines, pid, onClose,
       const p = byName.get(norm(parts[0])) ?? prods.find((x) => norm(x.name).startsWith(norm(parts[0])))
       if (!p || !(price > 0)) { miss.push(parts[0]); continue }
       const u = (parts[2] ?? '').toLowerCase()
-      const unit: Unit = u.startsWith('т') || u === 't' ? (isPrz ? 'kg' : 't') : u.startsWith('кг') || u === 'kg' ? 'kg' : u.startsWith('л') || u === 'l' ? 'l' : defUnit(p.id)
-      if (!taken.has(p.id) && !out.some((r) => r.product_id === p.id)) out.push({ key: nk(), product_id: p.id, price: String(price), unit, pref: false })
+      const unit: Unit = isSeed
+        ? (u.startsWith('торб') || u === 'pack' ? 'pack' : u.startsWith('кг') || u === 'kg' ? 'kg' : u.startsWith('т') || u === 't' ? 't' : defUnit(p.id))
+        : u.startsWith('т') || u === 't' ? (isPrz ? 'kg' : 't') : u.startsWith('кг') || u === 'kg' ? 'kg' : u.startsWith('л') || u === 'l' ? 'l' : defUnit(p.id)
+      if (!taken.has(p.id) && !out.some((r) => r.product_id === p.id)) out.push({ key: nk(), product_id: p.id, price: String(price), unit, pref: false, min: '' })
     }
     setRows((rs) => [...rs, ...out]); setPaste('')
     setPasteMsg(`Добавени ${out.length} реда${miss.length ? `; не са разпознати (${miss.length}): ${miss.slice(0, 8).join(', ')}${miss.length > 8 ? '…' : ''}` : ''}.`)
@@ -304,6 +349,7 @@ function OfferModal({ module, seasonId, offer, sups, prods, lines, pid, onClose,
     for (const r of live) {
       if (!r.product_id) return setError('Има ред без избран продукт (избери от списъка).')
       if (!(num(r.price) > 0)) return setError(`Цената на „${prods.find((p) => p.id === r.product_id)?.name}“ трябва да е число над 0.`)
+      if (r.min.trim() && !(num(r.min) > 0)) return setError(`Мин. количество за „${prods.find((p) => p.id === r.product_id)?.name}“ трябва да е число над 0.`)
       if (seen.has(r.product_id)) return setError(`„${prods.find((p) => p.id === r.product_id)?.name}“ е два пъти в офертата.`)
       seen.add(r.product_id)
     }
@@ -324,14 +370,15 @@ function OfferModal({ module, seasonId, offer, sups, prods, lines, pid, onClose,
       const keep = new Set(live.filter((r) => r.line_id).map((r) => r.line_id))
       const gone = lines.filter((l) => !keep.has(l.offer_line_id)).map((l) => l.offer_line_id)
       if (gone.length) { const r = await supabase.from('offer_line').delete().in('offer_line_id', gone); if (r.error) throw new Error(r.error.message) }
-      const col = isPrz ? 'prz_product_id' : 'fertilizer_product_id'
+      const col = COL[module]
+      const minOf = (r: Draft) => (isSeed && r.min.trim() ? num(r.min) : null)
       for (const r of live.filter((x) => x.line_id)) {
-        const u = await supabase.from('offer_line').update({ [col]: r.product_id, price: num(r.price), price_unit: r.unit, is_preferred: false }).eq('offer_line_id', r.line_id).select('offer_line_id')
+        const u = await supabase.from('offer_line').update({ [col]: r.product_id, price: num(r.price), price_unit: r.unit, min_qty: minOf(r), is_preferred: false }).eq('offer_line_id', r.line_id).select('offer_line_id')
         if (u.error) throw new Error(u.error.message)
       }
       const fresh = live.filter((x) => !x.line_id)
       if (fresh.length) {
-        const ins = await supabase.from('offer_line').insert(fresh.map((r) => ({ offer_id: offerId, organization_id: sup.organization_id, season_id: seasonId, [col]: r.product_id, price: num(r.price), price_unit: r.unit, is_preferred: false }))).select('offer_line_id,' + col)
+        const ins = await supabase.from('offer_line').insert(fresh.map((r) => ({ offer_id: offerId, organization_id: sup.organization_id, season_id: seasonId, [col]: r.product_id, price: num(r.price), price_unit: r.unit, min_qty: minOf(r), is_preferred: false }))).select('offer_line_id,' + col)
         if (ins.error) throw new Error(ins.error.message)
       }
       const prefProducts = live.filter((r) => r.pref).map((r) => r.product_id)
@@ -360,7 +407,7 @@ function OfferModal({ module, seasonId, offer, sups, prods, lines, pid, onClose,
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Оферта">
       <div className="modal" style={{ maxWidth: 980 }}>
         <div style={{ display: 'flex', alignItems: 'center' }}>
-          <h2 style={{ flex: 1 }}>{offer ? 'Редакция на оферта' : 'Нова оферта'} · {isPrz ? 'ПРЗ' : 'торове'}</h2>
+          <h2 style={{ flex: 1 }}>{offer ? 'Редакция на оферта' : 'Нова оферта'} · {MODULE_TEXT[module]}</h2>
           <button className="btn outline" onClick={onClose} disabled={busy}>Затвори</button>
         </div>
         {error && <div className="banner err" role="alert">{error}</div>}
@@ -386,7 +433,7 @@ function OfferModal({ module, seasonId, offer, sups, prods, lines, pid, onClose,
         <strong>Редове</strong>
         <div style={{ maxHeight: '40vh', overflow: 'auto' }}>
           <table className="grid">
-            <thead><tr><th>Продукт</th><th className="num" style={{ width: 120 }}>Цена (евро)</th><th style={{ width: 110 }}>Единица</th><th style={{ width: 80 }} title="Цената, която се ползва в плана за този продукт и сезон">Основна</th><th style={{ width: 40 }} /></tr></thead>
+            <thead><tr><th>{isSeed ? 'Сорт / хибрид' : 'Продукт'}</th><th className="num" style={{ width: 120 }}>{isSeed ? 'Цена EUR без ДДС' : 'Цена (евро)'}</th><th style={{ width: 110 }}>Единица</th>{isSeed && <th className="num" style={{ width: 110 }}>Мин. количество</th>}<th style={{ width: 80 }} title={isSeed ? 'Офертата, която планът и рекапитулацията ползват за този сорт и сезон' : 'Цената, която се ползва в плана за този продукт и сезон'}>{isSeed ? 'Избрана' : 'Основна'}</th><th style={{ width: 40 }} /></tr></thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.key}>
@@ -394,25 +441,28 @@ function OfferModal({ module, seasonId, offer, sups, prods, lines, pid, onClose,
                   <td className="num"><input className="input fi" style={{ textAlign: 'right' }} inputMode="decimal" aria-label="Цена" value={r.price} onChange={(e) => upd(r.key, { price: e.target.value.replace(',', '.') })} /></td>
                   <td>
                     <select className="input fi" aria-label="Единица" value={r.unit} onChange={(e) => upd(r.key, { unit: e.target.value as Unit })}>
-                      <option value="l">евро/л</option><option value="kg">евро/кг</option>{!isPrz && <option value="t">евро/т</option>}
+                      {isSeed
+                        ? <><option value="pack">евро/торба</option><option value="t">евро/т</option><option value="kg">евро/кг</option></>
+                        : <><option value="l">евро/л</option><option value="kg">евро/кг</option>{!isPrz && <option value="t">евро/т</option>}</>}
                     </select>
                   </td>
-                  <td style={{ textAlign: 'center' }}><input type="checkbox" aria-label="Основна" checked={r.pref} onChange={(e) => upd(r.key, { pref: e.target.checked })} /></td>
+                  {isSeed && <td className="num"><input className="input fi" style={{ textAlign: 'right' }} inputMode="decimal" aria-label="Мин. количество" value={r.min} onChange={(e) => upd(r.key, { min: e.target.value.replace(',', '.') })} /></td>}
+                  <td style={{ textAlign: 'center' }}><input type="checkbox" aria-label={isSeed ? 'Избрана' : 'Основна'} checked={r.pref} onChange={(e) => upd(r.key, { pref: e.target.checked })} /></td>
                   <td><button className="btn outline" style={{ minHeight: 28, padding: '0 7px' }} aria-label="Премахни реда" onClick={() => setRows((rs) => rs.filter((x) => x.key !== r.key))}>✕</button></td>
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan={5} className="empty">Няма редове. Добави ред или постави от Excel.</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={isSeed ? 6 : 5} className="empty">Няма редове. Добави ред или постави от Excel.</td></tr>}
             </tbody>
           </table>
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <button className="btn outline" onClick={() => setRows((rs) => [...rs, { key: nk(), product_id: '', price: '', unit: isPrz ? 'l' : 't', pref: false }])}>+ Добави ред</button>
+          <button className="btn outline" onClick={() => setRows((rs) => [...rs, { key: nk(), product_id: '', price: '', unit: isSeed ? 'pack' : isPrz ? 'l' : 't', pref: false, min: '' }])}>+ Добави ред</button>
         </div>
         <details>
           <summary style={{ cursor: 'pointer' }}>Постави редове от Excel</summary>
           <div style={{ display: 'grid', gap: 6, marginTop: 6 }}>
-            <span className="muted" style={{ fontSize: 13 }}>Всеки ред: продукт, цена и (по избор) единица – разделени с табулация или „;“. Продуктът се разпознава по име.</span>
-            <textarea className="input" rows={5} value={paste} onChange={(e) => setPaste(e.target.value)} placeholder={'БЕЛКАР\t18,50\tл\nПРОТИОСТАР\t42,00\tл'} />
+            <span className="muted" style={{ fontSize: 13 }}>Всеки ред: {isSeed ? 'сорт' : 'продукт'}, цена и (по избор) единица{isSeed ? ' (торба, т, кг)' : ''} – разделени с табулация или „;“. Продуктът се разпознава по име.</span>
+            <textarea className="input" rows={5} value={paste} onChange={(e) => setPaste(e.target.value)} placeholder={isSeed ? 'P64 LE 280\t182,00\tторба\nАвеню\t640\tт' : 'БЕЛКАР\t18,50\tл\nПРОТИОСТАР\t42,00\tл'} />
             <div><button className="btn outline" onClick={importPaste} disabled={!paste.trim()}>Добави от текста</button></div>
             {pasteMsg && <span className="muted">{pasteMsg}</span>}
           </div>
@@ -502,10 +552,10 @@ function SuppliersModal({ sups, onClose, onChanged }: { sups: Sup[]; onClose: ()
             <tbody>
               {list.map((s) => (
                 <tr key={s.supplier_id}>
-                  <td><input className="input fi" defaultValue={s.name} aria-label="Име" onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== s.name) void patch(s, { name: v }); else e.target.value = s.name }} /></td>
+                  <td>{s.is_own_production ? <span title="Вътрешен доставчик за собствените семена (произход Б/, Т/, П/…)">{s.name} <span className="chip">собствени семена</span></span> : <input className="input fi" defaultValue={s.name} aria-label="Име" onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== s.name) void patch(s, { name: v }); else e.target.value = s.name }} />}</td>
                   <td><input className="input fi" defaultValue={s.eik ?? ''} aria-label="ЕИК" onBlur={(e) => { const v = e.target.value.trim() || null; if (v !== s.eik) void patch(s, { eik: v }) }} /></td>
                   <td style={{ textAlign: 'center' }}><input type="checkbox" checked={s.is_active} aria-label="Активен" onChange={(e) => void patch(s, { is_active: e.target.checked })} /></td>
-                  <td><button className="btn outline" style={{ minHeight: 28, padding: '0 7px' }} aria-label={`Изтрий ${s.name}`} onClick={() => void remove(s)}>🗑</button></td>
+                  <td>{!s.is_own_production && <button className="btn outline" style={{ minHeight: 28, padding: '0 7px' }} aria-label={`Изтрий ${s.name}`} onClick={() => void remove(s)}>🗑</button>}</td>
                 </tr>
               ))}
               {list.length === 0 && <tr><td colSpan={4} className="empty">Още няма доставчици.</td></tr>}
@@ -514,6 +564,78 @@ function SuppliersModal({ sups, onClose, onChanged }: { sups: Sup[]; onClose: ()
         </div>
       </div>
       {confirmNode}
+    </div>
+  )
+}
+
+// ───────── семена: сравнение на офертите по сорт ─────────
+// Ред = сорт, колона = оферта. Зелено = най-ниска цена (торби и маса се сравняват отделно);
+// клик върху цена я отбелязва като „Избрана“ (тригерът в базата снема избора от другите оферти за сорта).
+function SeedCompare({ offers, lines, supName, prodById, q, onPick }: {
+  offers: Offer[]; lines: Line[]; supName: Map<string, string>; prodById: Map<string, Prod>; q: string; onPick: (l: Line) => Promise<void>
+}) {
+  const [busy, setBusy] = useState(false)
+  const live = offers.filter((o) => o.status !== 'rejected')
+  const cols = live
+  const byVar = new Map<string, Map<string, Line>>()
+  const offerIds = new Set(cols.map((o) => o.offer_id))
+  for (const l of lines) {
+    if (!l.variety_id || !offerIds.has(l.offer_id)) continue
+    const m = byVar.get(l.variety_id) ?? new Map<string, Line>()
+    m.set(l.offer_id, l); byVar.set(l.variety_id, m)
+  }
+  const n = norm(q)
+  const vars = [...byVar.keys()].map((id) => ({ id, p: prodById.get(id) }))
+    .filter((x) => !n || norm(x.p?.name ?? '').includes(n) || norm(x.p?.sub ?? '').includes(n))
+    .sort((a, b) => (a.p?.sub ?? '').localeCompare(b.p?.sub ?? '', 'bg') || (a.p?.name ?? '').localeCompare(b.p?.name ?? '', 'bg'))
+  if (cols.length === 0) return <div className="card pad muted">Няма оферти за семена за този сезон. Натисни „+ Нова оферта“.</div>
+  return (
+    <div className="card" style={{ overflow: 'auto' }}>
+      <table className="grid">
+        <thead>
+          <tr>
+            <th>Култура</th><th>Сорт / хибрид</th>
+            {cols.map((o) => (
+              <th key={o.offer_id} className="num">{supName.get(o.supplier_id) ?? '—'}<br />
+                <span className="muted" style={{ fontWeight: 400 }}>{o.offer_date}{o.valid_until ? ` · до ${o.valid_until}` : ''}{o.status === 'accepted' ? ' · приета' : ''}</span></th>
+            ))}
+            <th>Избрана</th>
+          </tr>
+        </thead>
+        <tbody>
+          {vars.map(({ id, p }) => {
+            const m = byVar.get(id) as Map<string, Line>
+            const min = new Map<string, number>()
+            for (const l of m.values()) { const k = unitClass(l.price_unit); const v = perBase(l.price, l.price_unit); if (!min.has(k) || v < (min.get(k) as number)) min.set(k, v) }
+            const sel = [...m.values()].find((l) => l.is_preferred)
+            const selOffer = sel ? cols.find((o) => o.offer_id === sel.offer_id) : undefined
+            return (
+              <tr key={id}>
+                <td>{p?.sub ?? ''}</td>
+                <td>{p?.name ?? '—'}</td>
+                {cols.map((o) => {
+                  const l = m.get(o.offer_id)
+                  if (!l) return <td key={o.offer_id} />
+                  const low = perBase(l.price, l.price_unit) <= (min.get(unitClass(l.price_unit)) as number) + 1e-9 && m.size > 1
+                  return (
+                    <td key={o.offer_id} className="num" style={low ? { background: 'var(--ok-bg)', fontWeight: 600 } : undefined}>
+                      <button type="button" className="linkish" disabled={busy} title={l.is_preferred ? 'Избрана – клик снема избора' : 'Направи избрана'}
+                        onClick={async () => { setBusy(true); await onPick(l); setBusy(false) }}
+                        aria-pressed={l.is_preferred} style={{ background: 'none', border: 0, cursor: 'pointer', font: 'inherit', color: 'inherit', padding: 0 }}>
+                        {l.is_preferred ? '◉' : '○'} {fmtP(l.price)} /{UNIT_TEXT[l.price_unit]}
+                      </button>
+                      {l.min_qty != null && <div className="muted" style={{ fontSize: 12 }}>мин. {fmtMin(l.min_qty)}</div>}
+                    </td>
+                  )
+                })}
+                <td>{selOffer ? supName.get(selOffer.supplier_id) : <span className="chip warn">няма избрана</span>}</td>
+              </tr>
+            )
+          })}
+          {vars.length === 0 && <tr><td colSpan={cols.length + 3} className="empty">Няма сортове по това търсене.</td></tr>}
+        </tbody>
+      </table>
+      <div className="muted pad" style={{ fontSize: 13 }}>◉ = избрана (планът и рекапитулацията ползват нея). Зелено = най-ниска цена; торба и т/кг се сравняват отделно. Отхвърлените оферти не се показват.</div>
     </div>
   )
 }

@@ -141,7 +141,7 @@ export default function App() {
         {page === 'rotation' && <Rotation />}
         {page === 'rotation-recap' && <RotationRecap />}
         {page === 'seeds' && <SeedPlanning />}
-        {page === 'seeds-offers' && <Placeholder title="Планиране семена → Оферти" />}
+        {page === 'seeds-offers' && <Offers module="seed" />}
         {page === 'seeds-recap' && <Placeholder title="Планиране семена → Рекапитулация" />}
         {page === 'fert' && <FertPlanning />}
         {page === 'prz' && <PrzPlanning />}
