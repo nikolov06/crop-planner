@@ -104,3 +104,25 @@ export function seedLine(crop: Crop, ps: PSeed, b: Batch | undefined, v: Variety
 export const rateUnitOf = (crop: Crop) => (crop.order_unit === 'kg' ? 'кг/дка' : crop.seeding_method === 'solid' ? 'к.с./м²' : 'сем./дка')
 /** нормата за средната в рекапитулацията: кг/дка за житни, кълняеми/м² за рапица, сем./дка за редовите */
 export const rateForAvg = (crop: Crop, l: SeedLine) => (crop.order_unit === 'kg' ? l.calc.kgDa : Number(l.ps.target_rate))
+
+/** Нужда по сорт за сезона: сума „С преразход“ на БЗС (торби с 1 знак, т с 2 знака) – за сравнението на офертите. */
+export type VarietyNeed = { unit: QtyUnit; qty: number | null; bzs: number; area: number; missing: number; missingWhat: string[] }
+export async function loadSeedNeedByVariety(seasonId: number): Promise<Map<string, VarietyNeed>> {
+  const d = await loadSeedData(seasonId)
+  const cropById = new Map(d.crops.map((c) => [c.crop_id, c]))
+  const varById = new Map(d.varieties.map((v) => [v.variety_id, v]))
+  const batchById = new Map(d.batches.map((b) => [b.batch_id, b]))
+  const plById = new Map(d.plantings.map((p) => [p.planting_id, p]))
+  const out = new Map<string, VarietyNeed>()
+  for (const ps of d.pseeds) {
+    const p = plById.get(ps.planting_id); const crop = p ? cropById.get(p.crop_id) : undefined
+    if (!p || !crop) continue
+    const l = seedLine(crop, ps, ps.batch_id ? batchById.get(ps.batch_id) : undefined, varById.get(ps.variety_id), undefined)
+    const x = out.get(ps.variety_id) ?? { unit: l.unit, qty: null, bzs: 0, area: 0, missing: 0, missingWhat: [] }
+    x.bzs++; x.area += Number(ps.area_da)
+    if (l.withOverage == null) { x.missing++; for (const w of l.calc.missingWhat) if (!x.missingWhat.includes(w)) x.missingWhat.push(w) }
+    else x.qty = (l.unit === 'packs' ? round1 : round2)((x.qty ?? 0) + l.withOverage)
+    out.set(ps.variety_id, x)
+  }
+  return out
+}

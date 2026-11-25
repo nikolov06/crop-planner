@@ -52,6 +52,7 @@ Crop Planner е уеб приложение за планиране на зем�
 - `20261118170000_recap_eco_schemes.sql` (`company.in_holding`; номенклатури `recap_crop_group` и `eco_scheme_rule` с RLS като `crop`/`season`; изгледи `v_recap_company_crop`, `v_recap_base_crop`)
 - `20261124120000_seed_import.sql` (импорт на сортове: `planting_seed.addon`, `variety.default_rate`, `variety_alias`, лог `seed_import`/`seed_import_item`, RPC `apply_seed_import` и `undo_seed_import`)
 - `20261125120000_seed_quality_offers.sql` (МХЗ и кълняемост в `variety` и `planting_seed`; `planting_seed.rate_kg_da_manual`; `v_seed_calc` с нови колони накрая – `need_t_base`, `packs_base`, `rate_kg_da_info` и др.; `supplier.is_own_production` с „Собствено производство“; оферти за семена – `offer.module = 'seed'`, `offer_line.variety_id`, `min_qty`, мерна единица `pack`; изглед `v_seed_price_selected`)
+- `20261125130000_seed_import_update.sql` (повторният импорт обновява реда в `planting_seed` – пази МХЗ, кълняемост, ръчна норма; партидата се маха само при смяна на сорта; `seed_import_item.new_updated_at` за отмяната; рапица във `v_seed_calc` – торби без МХЗ и без CEILING)
 
 Типът за геометрия е `extensions.geometry`.
 
@@ -61,9 +62,17 @@ Crop Planner е уеб приложение за планиране на зем�
 
 Не изпълнявай `supabase db push` без изрично съгласие на собственика на проекта.
 
+- `supabase db push` – само след изричното „да, push“ на собственика в чата за конкретната миграция (с името ѝ). Друго „да“, „go“ или „ок“ не стига; при съмнение питай.
+- Преди питането покажи резултата от BEGIN/ROLLBACK пробата, `supabase migration list` и `db push --dry-run`; backup с `pg_dump`. Ако backup не е възможен, кажи го и чакай решение – не го заменяй сам с нещо друго.
+
+## Git: клонове и main
+
+- Никога push или merge в `main` без изричното „да, merge“ на собственика в чата. Друго „да“ (за commit, push на клон, db push) не важи за `main`.
+- Работи се само в клонове. Към `main` се стига само през Pull Request; PR-ът не се мърджва без „да, merge“.
+
 Рекапитулацията (Сеитбооборот → Рекапитулация) смята ДЗЕС/ЕКОРОК в `web/src/lib/recap.ts`; тестовете са в `recap.test.ts` (`npm test` от `web/`). Старите `diversification_rule` / `v_diversification` не се ползват от екрана.
 
-Планиране семена (Планиране | Оферти | Рекапитулация): формулите са в `web/src/lib/seedcalc.ts` (МХЗ и кълняемост БЗС → партида → сорт; ръчна норма; нужда и с преразход; рапица в торби), групирането и закръглянето на заявката – в `seedrecap.ts` (торби нагоре до цяла торба за Сорт × База, фирмата е само филтър), зареждането – в `seeddata.ts`; тестове в `seedcalc.test.ts`. Цените на семената са само от избраната оферта (`v_seed_price_selected`), без резервна най-ниска цена.
+Планиране семена (Планиране | Оферти | Рекапитулация): формулите са в `web/src/lib/seedcalc.ts` (МХЗ и кълняемост БЗС → партида → сорт; ръчна норма; нужда и с преразход; рапица в торби през кълняемостта, без МХЗ и без CEILING; липсващи данни – празно + червен маркер, никога 0), групирането и закръглянето на заявката – в `seedrecap.ts` (торби нагоре до цяла торба за Сорт × База, фирмата е само филтър), зареждането – в `seeddata.ts`; тестове в `seedcalc.test.ts`. Цените на семената са само от избраната оферта (`v_seed_price_selected`), без резервна най-ниска цена.
 
 ## Локална разработка
 

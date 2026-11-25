@@ -3,6 +3,8 @@ import { supabase } from '../lib/supabase'
 import { useConfirm } from '../lib/confirm'
 import { downloadXlsx } from '../lib/xlsx'
 import { MultiFilter, anyToken } from '../lib/multifilter'
+import { loadSeedNeedByVariety, type VarietyNeed } from '../lib/seeddata'
+import { seedCost } from '../lib/seedcalc'
 
 // Оферти от доставчици за ПРЗ, торове и семена: регистриране, редакция, статус, основна/избрана цена по продукт.
 // При семената планът ползва САМО избраната оферта (без резервна най-ниска цена).
@@ -115,6 +117,16 @@ export default function Offers({ module }: { module: Module }) {
     return () => { off = true }
   }, [seasonId, module, col, reload])
 
+  // семена: нужда по сорт за сезона (сума „С преразход“ от Планиране) – за стойността на всяка оферта
+  const [need, setNeed] = useState<Map<string, VarietyNeed> | null>(null)
+  useEffect(() => {
+    if (!isSeed || seasonId == null) return
+    let off = false
+    setNeed(null)
+    loadSeedNeedByVariety(seasonId).then((m) => { if (!off) setNeed(m) }).catch(() => { if (!off) setNeed(new Map()) })
+    return () => { off = true }
+  }, [isSeed, seasonId, reload])
+
   const supName = useMemo(() => new Map(sups.map((s) => [s.supplier_id, s.name])), [sups])
   const prodById = useMemo(() => new Map(prods.map((p) => [p.id, p])), [prods])
   const pid = (l: Line) => (l[col] ?? '') as string
@@ -192,7 +204,7 @@ export default function Offers({ module }: { module: Module }) {
         </div>
       )}
       {isSeed && tab === 'compare' && (
-        <SeedCompare offers={offers.filter((o) => view.includes(o))} lines={lines} supName={supName} prodById={prodById} q={q}
+        <SeedCompare offers={offers.filter((o) => view.includes(o))} lines={lines} supName={supName} prodById={prodById} q={q} need={need}
           onPick={async (l) => {
             setError(null)
             const r = await supabase.from('offer_line').update({ is_preferred: !l.is_preferred }).eq('offer_line_id', l.offer_line_id).select('offer_line_id')
@@ -571,9 +583,11 @@ function SuppliersModal({ sups, onClose, onChanged }: { sups: Sup[]; onClose: ()
 // ───────── семена: сравнение на офертите по сорт ─────────
 // Ред = сорт, колона = оферта. Зелено = най-ниска цена (торби и маса се сравняват отделно);
 // клик върху цена я отбелязва като „Избрана“ (тригерът в базата снема избора от другите оферти за сорта).
-function SeedCompare({ offers, lines, supName, prodById, q, onPick }: {
-  offers: Offer[]; lines: Line[]; supName: Map<string, string>; prodById: Map<string, Prod>; q: string; onPick: (l: Line) => Promise<void>
+function SeedCompare({ offers, lines, supName, prodById, q, need, onPick }: {
+  offers: Offer[]; lines: Line[]; supName: Map<string, string>; prodById: Map<string, Prod>; q: string; need: Map<string, VarietyNeed> | null; onPick: (l: Line) => Promise<void>
 }) {
+  const fmt2 = (x: number) => x.toLocaleString('bg-BG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const fmtQty = (n: VarietyNeed) => (n.qty == null ? '' : `${n.qty.toLocaleString('bg-BG', { minimumFractionDigits: n.unit === 'packs' ? 1 : 2, maximumFractionDigits: n.unit === 'packs' ? 1 : 2 })} ${n.unit === 'packs' ? 'торби' : 'т'}`)
   const [busy, setBusy] = useState(false)
   const live = offers.filter((o) => o.status !== 'rejected')
   const cols = live
@@ -595,6 +609,7 @@ function SeedCompare({ offers, lines, supName, prodById, q, onPick }: {
         <thead>
           <tr>
             <th>Култура</th><th>Сорт / хибрид</th>
+            <th className="num" title="Сума „С преразход“ по БЗС за сезона (Планиране семена). Под цената на всяка оферта е стойността за това количество.">Нужда</th>
             {cols.map((o) => (
               <th key={o.offer_id} className="num">{supName.get(o.supplier_id) ?? '—'}<br />
                 <span className="muted" style={{ fontWeight: 400 }}>{o.offer_date}{o.valid_until ? ` · до ${o.valid_until}` : ''}{o.status === 'accepted' ? ' · приета' : ''}</span></th>
@@ -609,13 +624,20 @@ function SeedCompare({ offers, lines, supName, prodById, q, onPick }: {
             for (const l of m.values()) { const k = unitClass(l.price_unit); const v = perBase(l.price, l.price_unit); if (!min.has(k) || v < (min.get(k) as number)) min.set(k, v) }
             const sel = [...m.values()].find((l) => l.is_preferred)
             const selOffer = sel ? cols.find((o) => o.offer_id === sel.offer_id) : undefined
+            const nd = need?.get(id)
             return (
               <tr key={id}>
                 <td>{p?.sub ?? ''}</td>
                 <td>{p?.name ?? '—'}</td>
+                <td className="num">{need == null ? <span className="muted">…</span> : !nd ? <span className="muted" title="Сортът не е назначен на нито едно БЗС за сезона">—</span> : <>
+                  {fmtQty(nd)}
+                  {nd.missing > 0 && <span className="chip err" style={{ marginLeft: 4 }} title={`${nd.missing} от ${nd.bzs} БЗС без данни${nd.missingWhat.length ? ` (${nd.missingWhat.join(', ')})` : ''} – не влизат в нуждата`}>{nd.qty == null ? 'липсват данни' : `+ ${nd.missing} БЗС без данни`}</span>}
+                  <div className="muted" style={{ fontSize: 12 }}>{nd.bzs} БЗС · {Math.round(nd.area).toLocaleString('bg-BG')} дка</div>
+                </>}</td>
                 {cols.map((o) => {
                   const l = m.get(o.offer_id)
                   if (!l) return <td key={o.offer_id} />
+                  const cost = nd && nd.qty != null && l.price_unit !== 'l' ? seedCost(nd.qty, nd.unit, { price: l.price, unit: l.price_unit, supplier: null }) : null
                   const low = perBase(l.price, l.price_unit) <= (min.get(unitClass(l.price_unit)) as number) + 1e-9 && m.size > 1
                   return (
                     <td key={o.offer_id} className="num" style={low ? { background: 'var(--ok-bg)', fontWeight: 600 } : undefined}>
@@ -624,6 +646,9 @@ function SeedCompare({ offers, lines, supName, prodById, q, onPick }: {
                         aria-pressed={l.is_preferred} style={{ background: 'none', border: 0, cursor: 'pointer', font: 'inherit', color: 'inherit', padding: 0 }}>
                         {l.is_preferred ? '◉' : '○'} {fmtP(l.price)} /{UNIT_TEXT[l.price_unit]}
                       </button>
+                      {cost && (cost.mismatch
+                        ? <div style={{ fontSize: 12 }}><span className="chip warn" title="Цената е за торба, а нуждата е в т (или обратно)">мерна единица</span></div>
+                        : cost.value != null && <div style={{ fontSize: 12 }} title="Нуждата × цената">= {fmt2(cost.value)} EUR</div>)}
                       {l.min_qty != null && <div className="muted" style={{ fontSize: 12 }}>мин. {fmtMin(l.min_qty)}</div>}
                     </td>
                   )
@@ -632,10 +657,10 @@ function SeedCompare({ offers, lines, supName, prodById, q, onPick }: {
               </tr>
             )
           })}
-          {vars.length === 0 && <tr><td colSpan={cols.length + 3} className="empty">Няма сортове по това търсене.</td></tr>}
+          {vars.length === 0 && <tr><td colSpan={cols.length + 4} className="empty">Няма сортове по това търсене.</td></tr>}
         </tbody>
       </table>
-      <div className="muted pad" style={{ fontSize: 13 }}>◉ = избрана (планът и рекапитулацията ползват нея). Зелено = най-ниска цена; торба и т/кг се сравняват отделно. Отхвърлените оферти не се показват.</div>
+      <div className="muted pad" style={{ fontSize: 13 }}>◉ = избрана (планът и рекапитулацията ползват нея). Зелено = най-ниска цена; торба и т/кг се сравняват отделно. „Нужда“ = сума „С преразход“ по БЗС за сезона; под всяка цена е стойността за цялото количество (без закръгляне до торба по база). Отхвърлените оферти не се показват.</div>
     </div>
   )
 }
