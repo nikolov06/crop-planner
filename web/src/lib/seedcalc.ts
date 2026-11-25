@@ -6,7 +6,8 @@
 //   Брой семена/м² = CEILING(кълняеми семена/м² ÷ (кълняемост/100))
 //   Норма кг/дка   = ROUND(брой × МХЗ ÷ 1000) (по стъпката на културата) или ръчната (1 знак)
 //   Нужда т        = норма × площ ÷ 1000;  С преразход = нужда × (1 + преразход %)
-// Рапица (слята, поръчва се в торби): торби през семената; кг/дка с 2 знака само за информация.
+// Рапица (слята, поръчва се в торби): сем./дка = кълняеми/м² ÷ кълняемост × 1000 (без закръгляне нагоре);
+//   торби = сем./дка × дка ÷ семена в торба. Нужна е само кълняемостта; МХЗ – само за кг/дка (2 знака, информативно).
 // Редови (слънчоглед, царевица, сорго): торби = сем./дка × площ ÷ семена в торба (× преразход).
 // МХЗ и кълняемост: БЗС → партида → сорт.
 
@@ -66,6 +67,8 @@ export type Calc = {
   tkwSource: Source
   germSource: Source
   missing: boolean
+  /** какво липсва за количеството (празно, ако нищо) */
+  missingWhat: string[]
 }
 
 // защита от 526,0000000001 → 527 и 22,4999999 → 22 при плаваща запетая
@@ -90,31 +93,34 @@ export function calcRow(crop: Crop, ps: SeedInput, b: Batch | undefined, v?: Var
   const out: Calc = {
     totalSeedsM2: null, kgDa: null, kgDaCalc: null, manual: false, kgDaInfo: null,
     kg: null, t: null, packs: null, needT: null, needPacks: null,
-    overagePct: ov, tkw, germ, tkwSource, germSource, missing: false,
+    overagePct: ov, tkw, germ, tkwSource, germSource, missing: false, missingWhat: [],
   }
+  const miss = (...what: (string | false)[]) => { out.missing = true; out.missingWhat = what.filter((w): w is string => !!w); return out }
   const area = Number(ps.area_da)
   const rate = Number(ps.target_rate)
 
   if (crop.seeding_method === 'solid') {
-    if (germ) out.totalSeedsM2 = totalSeeds(rate, germ)
-    if (crop.order_unit === 'packs') {   // рапица
-      if (out.totalSeedsM2 != null && tkw) out.kgDaInfo = round2((out.totalSeedsM2 * tkw) / 1000)
-      if (out.totalSeedsM2 == null || !spp) { out.missing = true; return out }
-      out.needPacks = (out.totalSeedsM2 * 1000 * area) / spp
+    if (crop.order_unit === 'packs') {   // рапица: МХЗ не е нужна за торбите
+      const seedsM2 = germ ? clean((rate * 100) / germ) : null
+      out.totalSeedsM2 = seedsM2
+      if (seedsM2 != null && tkw) out.kgDaInfo = round2((seedsM2 * tkw) / 1000)
+      if (seedsM2 == null || !spp) return miss(!germ && 'кълняемост', !spp && 'семена в торба')
+      out.needPacks = (seedsM2 * 1000 * area) / spp
       out.packs = out.needPacks * k
       return out
     }
+    if (germ) out.totalSeedsM2 = totalSeeds(rate, germ)
     if (out.totalSeedsM2 != null && tkw) out.kgDaCalc = kgPerDa(out.totalSeedsM2, tkw, Number(crop.rate_rounding_step ?? 1))
     const manual = ps.rate_kg_da_manual != null ? Number(ps.rate_kg_da_manual) : null
     out.manual = manual != null
     out.kgDa = manual ?? out.kgDaCalc
-    if (out.kgDa == null) { out.missing = true; return out }
+    if (out.kgDa == null) return miss(!tkw && 'МХЗ', !germ && 'кълняемост')
     out.needT = (out.kgDa * area) / 1000
     out.t = out.needT * k
     out.kg = out.t * 1000
     return out
   }
-  if (!spp) { out.missing = true; return out }
+  if (!spp) return miss('семена в торба')
   out.needPacks = (rate * area) / spp
   out.packs = out.needPacks * k
   return out

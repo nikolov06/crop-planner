@@ -5,7 +5,7 @@ import { ColumnPicker, useHiddenCols } from '../lib/columns'
 import { MultiFilter, anyToken, splitMulti } from '../lib/multifilter'
 import { calcRow, round1, type Crop, type Variety, type Batch, type SeedPrice, type Source } from '../lib/seedcalc'
 import { loadSeedData, loadSeasons, seedLine, type Planting, type PSeed, type Repro, type SeedLine } from '../lib/seeddata'
-import { downloadXlsx, type Cell } from '../lib/xlsx'
+import { downloadXlsx, red, type Cell } from '../lib/xlsx'
 import { useConfirm } from '../lib/confirm'
 import SeedImport from './SeedImport'
 
@@ -295,16 +295,17 @@ export default function SeedPlanning() {
 
   // ---- суми за показаните ----
   const totals = useMemo(() => {
-    let area = 0, t = 0, packs = 0, value = 0, noPrice = 0
+    let area = 0, t = 0, packs = 0, value = 0, noPrice = 0, missing = 0
     for (const p of view) {
       area += p.planted_area_da ?? 0
       const ls = linesByPlanting.get(p.planting_id)
       const s = sumFor(ls)
+      if (s?.missing) missing++
       if (!s || s.withOverage == null) continue
       if (ls?.[0]?.unit === 'packs') packs += s.withOverage; else t += s.withOverage
       if (s.value != null) value += s.value; else noPrice++
     }
-    return { area, t, packs, value, noPrice }
+    return { area, t, packs, value, noPrice, missing }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, linesByPlanting])
 
@@ -327,7 +328,7 @@ export default function SeedPlanning() {
   function exportXlsx() {
     const headers = ['БЗС', 'Фирма', 'Стопанска база', 'Култура', 'Площ, дка', 'Сорт / хибрид', 'Добавка', 'Размножение', 'Произход',
       'МХЗ, г', 'Кълняемост, %', 'Кълняеми/м²', 'Семена/м²', 'Норма', 'Ед. норма', 'Ръчна норма', 'Преразход, %', 'Нужда', 'С преразход', 'Ед. количество',
-      'Доставчик', 'Цена EUR без ДДС', 'Ед. цена', 'Стойност EUR', 'EUR/дка']
+      'Доставчик', 'Цена EUR без ДДС', 'Ед. цена', 'Стойност EUR', 'EUR/дка', 'Забележка']
     const rows: Cell[][] = []
     for (const p of view) {
       const crop = cropById.get(p.crop_id)
@@ -341,11 +342,12 @@ export default function SeedPlanning() {
         const area = ls.length > 1 ? Number(l.ps.area_da) : p.planted_area_da
         rows.push([...head, area,
           varById.get(l.ps.variety_id)?.name ?? '', l.ps.addon ?? null, b?.reproduction_id != null ? reproById.get(b.reproduction_id) ?? null : null, l.ps.seed_origin,
-          l.calc.tkw, l.calc.germ, solid ? Number(l.ps.target_rate) : null, l.calc.totalSeedsM2,
+          l.calc.tkw, l.calc.germ, solid ? Number(l.ps.target_rate) : null, l.calc.totalSeedsM2 == null ? null : round1(l.calc.totalSeedsM2),
           kg ? l.calc.kgDa : solid ? l.calc.kgDaInfo : Number(l.ps.target_rate), kg ? 'кг/дка' : solid ? 'кг/дка (инф.)' : 'сем./дка',
-          l.calc.manual, l.calc.overagePct, l.need, l.withOverage, l.unit === 'packs' ? 'торби' : 'т',
+          l.calc.manual, l.calc.overagePct, l.need ?? (l.calc.missing ? red('липсват данни') : null), l.withOverage ?? (l.calc.missing ? red('липсват данни') : null), l.unit === 'packs' ? 'торби' : 'т',
           l.price?.supplier ?? null, l.price?.price ?? null, l.price ? UNIT_TEXT[l.price.unit] : null, l.value,
-          l.value != null && area ? Math.round((l.value / Number(area)) * 100) / 100 : null])
+          l.value != null && area ? Math.round((l.value / Number(area)) * 100) / 100 : null,
+          l.calc.missing ? red(`липсват данни${l.calc.missingWhat.length ? `: ${l.calc.missingWhat.join(', ')}` : ''}`) : null])
       }
     }
     downloadXlsx(`планиране_семена_${new Date().toISOString().slice(0, 10)}.xlsx`, 'Планиране семена', headers, rows)
@@ -357,6 +359,7 @@ export default function SeedPlanning() {
         <h1>Планиране семена</h1>
         <span className="muted">
           {loading ? 'Зареждане…' : `${view.length} от ${plantings.length} БЗС · ${fmtArea(totals.area)} дка · с преразход ${fmtN(totals.t, 2)} т и ${fmtN(totals.packs, 1)} торби · ${fmtN(totals.value, 2)} EUR${totals.noPrice ? ` (+ ${totals.noPrice} БЗС без цена)` : ''}`}
+          {!loading && totals.missing > 0 && <span className="chip err" style={{ marginLeft: 8 }} title="Тези БЗС нямат кълняемост, МХЗ или семена в торба и не влизат в сумите">{totals.missing} БЗС: липсват данни</span>}
         </span>
       </div>
 
@@ -445,7 +448,7 @@ export default function SeedPlanning() {
                   {preview.c.packs != null ? `${isSolid ? ' · ' : ''}нужда ${fmtN(preview.c.needPacks, 1)} торби, с преразход ${fmtN(preview.c.packs, 1)}` : ''}
                 </div>
               )}
-              {preview?.c.missing && <div className="muted">Няма нужните данни (кълняемост, МХЗ или семена в торба) – въведи ги по-долу или в сорта/партидата.</div>}
+              {preview?.c.missing && <div className="muted">Липсва: {preview.c.missingWhat.join(', ') || 'кълняемост, МХЗ или семена в торба'} – въведи ги по-долу или в сорта/партидата.</div>}
 
               <div className="filters" style={{ borderTop: '1px solid var(--border, #e3e3e3)', paddingTop: 10 }}>
                 <span className="muted" style={{ alignSelf: 'center' }}>Качество за избраните ({selSeedIds.length} реда със сорт); празно = без промяна:</span>
@@ -522,7 +525,7 @@ export default function SeedPlanning() {
                   {vis('seeds') && (<td className="num">{single && c?.totalSeedsM2 != null ? fmtN(c.totalSeedsM2, 0) : ''}</td>)}
                   {vis('rate') && (<td className="num" onClick={(e) => e.stopPropagation()}>{!r0 || !crop ? '' : !single ? <span className="muted">няколко</span>
                     : kg ? (
-                      c?.kgDa == null ? <span className="chip warn" title="Въведи МХЗ и кълняемост (или ръчна норма)">липсват данни</span> : (
+                      c?.kgDa == null ? <span className="chip err" title={`Липсва: ${c?.missingWhat.join(', ') || 'МХЗ, кълняемост'} – въведи ги (или ръчна норма)`}>липсват данни</span> : (
                         <>
                           <EditCell value={c.manual ? c.kgDa : null} label="Ръчна норма кг/дка"
                             title={c.manual ? `Ръчна норма; изчислената е ${fmtMaybe(c.kgDaCalc)} кг/дка` : 'Изчислена; въведи стойност за ръчна норма (1 знак)'}
@@ -532,11 +535,11 @@ export default function SeedPlanning() {
                           {c.manual && <button className="reset-btn" title={`Върни изчислената (${c.kgDaCalc == null ? 'няма данни' : fmtMaybe(c.kgDaCalc)})`} aria-label="Върни изчислената норма" onClick={() => void patchSeed(r0, { rate_kg_da_manual: null })}>↺</button>}
                         </>
                       ))
-                    : solid ? (c?.kgDaInfo != null ? <span title="Само за информация – количеството се смята в торби през семената">{fmtN(c.kgDaInfo, 2)}<span className="muted"> кг/дка (инф.)</span></span> : <span className="chip warn" title="Въведи МХЗ и кълняемост">липсват данни</span>)
+                    : solid ? (c?.kgDaInfo != null ? <span title="Само за информация – количеството се смята в торби през семената">{fmtN(c.kgDaInfo, 2)}<span className="muted"> кг/дка (инф.)</span></span> : (c?.missing ? <span className="chip err" title={`Липсва: ${c.missingWhat.join(', ')} – за торбите е нужна кълняемостта`}>липсват данни</span> : <span className="muted" title="кг/дка е само информативен – иска МХЗ">—</span>))
                     : <><EditCell value={Number(r0.target_rate)} label="Норма семена/дка" display={fmtN(Number(r0.target_rate), 0)} onSave={async (v) => { if (v != null) await patchSeed(r0, { target_rate: v }) }} /><span className="muted"> сем./дка</span></>}
                   </td>)}
-                  {vis('need') && (<td className="num">{s?.need != null ? <>{fmtQ(s.need, packs)}{qtyUnit(packs)}</> : ''}</td>)}
-                  {vis('withov') && (<td className="num" title={c ? `Преразход ${fmtMaybe(c.overagePct)} %` : undefined}>{s?.withOverage != null ? <>{fmtQ(s.withOverage, packs)}{qtyUnit(packs)}</> : (s?.missing ? <span className="chip warn">липсват данни</span> : '')}</td>)}
+                  {vis('need') && (<td className="num">{s?.need != null ? <>{fmtQ(s.need, packs)}{qtyUnit(packs)}</> : (s?.missing ? <span className="chip err" title={c?.missingWhat.length ? `Липсва: ${c.missingWhat.join(', ')}` : undefined}>липсват данни</span> : '')}</td>)}
+                  {vis('withov') && (<td className="num" title={c ? `Преразход ${fmtMaybe(c.overagePct)} %` : undefined}>{s?.withOverage != null ? <>{fmtQ(s.withOverage, packs)}{qtyUnit(packs)}</> : (s?.missing ? <span className="chip err" title={c?.missingWhat.length ? `Липсва: ${c.missingWhat.join(', ')}` : undefined}>липсват данни</span> : '')}</td>)}
                   {vis('price') && (<td className="num">{!l0 ? '' : price && sameVariety ? <span title={priceTitle(price)}>{priceText(price)}</span> : <span className="chip warn" title="Няма избрана оферта за сорта и сезона (Планиране семена → Оферти)">—</span>}</td>)}
                   {vis('value') && (<td className="num">{!l0 ? '' : s?.mismatch ? <span className="chip warn" title="Цената е за торба, а количеството е в т (или обратно) – не се превръща">мерна единица</span> : s?.value != null ? fmtN(s.value, 2) : s?.noPrice ? '—' : ''}</td>)}
                   {vis('eurda') && (<td className="num">{s?.value != null && (p.planted_area_da ?? 0) > 0 ? fmtN(s.value / (p.planted_area_da as number), 2) : ''}</td>)}

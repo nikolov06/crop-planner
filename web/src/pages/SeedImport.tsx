@@ -255,7 +255,7 @@ export default function SeedImport({ defaults, onClose, onDone }: {
   const bzsLabel = (p: PlantingRef) => `${p.field_name} · ${p.isak_number ?? 'без №'} · ${p.company_name ?? '—'} · ${p.farm_base_name ?? '—'} · ${fmtArea(p.planted_area_da)} дка`
   const qty = (r: PreviewRow) => {
     if (!r.calc) return ''
-    if (r.calc.missing) return <span className="chip warn">липсват данни</span>
+    if (r.calc.missing) return <span className="chip err" title={r.calc.missingWhat.length ? `Липсва: ${r.calc.missingWhat.join(', ')}` : undefined}>липсват данни</span>
     if ((r.calc.t ?? 0) > 0) return `${fmtArea(r.calc.t)} т`
     if ((r.calc.packs ?? 0) > 0) return `${fmtInt(Math.ceil(r.calc.packs ?? 0))} торби`
     return ''
@@ -365,7 +365,7 @@ export default function SeedImport({ defaults, onClose, onDone }: {
                 <tbody>
                   {summary.map((s) => (
                     <tr key={s.name}><td>{s.name}</td><td className="num">{s.bzs}</td><td className="num">{fmtArea(s.area)}</td>
-                      <td className="num">{s.t > 0 ? fmtArea(s.t) : ''}</td><td className="num">{s.packs > 0 ? fmtInt(Math.ceil(s.packs)) : ''}{s.missing ? <> <span className="chip warn">{s.missing} без данни</span></> : ''}</td></tr>
+                      <td className="num">{s.t > 0 ? fmtArea(s.t) : ''}</td><td className="num">{s.packs > 0 ? fmtInt(Math.ceil(s.packs)) : ''}{s.missing ? <> <span className="chip err">{s.missing} без данни</span></> : ''}</td></tr>
                   ))}
                 </tbody>
               </table>

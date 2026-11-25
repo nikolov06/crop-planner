@@ -1,7 +1,15 @@
 // Минимален писач на .xlsx без външни пакети (zip без компресия + inline strings).
 // Достатъчен за експорт на таблица: заглавен ред (удебелен), текст, числа, да/не.
 
-export type Cell = string | number | boolean | null | undefined
+export type Plain = string | number | boolean | null | undefined
+/** Клетка със стил: red = червен маркер (липсват данни), bold = ред „Общо“. */
+export type Styled = { v: Plain; s: 'red' | 'bold' }
+export type Cell = Plain | Styled
+const isStyled = (c: Cell): c is Styled => typeof c === 'object' && c !== null
+const STYLE_ID = { head: 1, red: 2, bold: 1 } as const
+/** червен маркер за Excel */
+export const red = (v: Plain): Styled => ({ v, s: 'red' })
+export const bold = (v: Plain): Styled => ({ v, s: 'bold' })
 
 const enc = new TextEncoder()
 
@@ -33,12 +41,14 @@ function colName(i: number): string {
 }
 
 function sheetXml(headers: string[], rows: Cell[][]): string {
-  const cell = (v: Cell, r: number, c: number, head: boolean): string => {
+  const cell = (raw: Cell, r: number, c: number, head: boolean): string => {
     const ref = colName(c) + (r + 1)
-    const style = head ? ' s="1"' : ''
+    const sid = head ? STYLE_ID.head : isStyled(raw) ? STYLE_ID[raw.s] : 0
+    const v = isStyled(raw) ? raw.v : raw
+    const style = sid ? ` s="${sid}"` : ''
     if (v === null || v === undefined || v === '') return head ? `<c r="${ref}"${style} t="inlineStr"><is><t></t></is></c>` : ''
     if (typeof v === 'number' && Number.isFinite(v)) return `<c r="${ref}"${style}><v>${v}</v></c>`
-    if (typeof v === 'boolean') return `<c r="${ref}" t="inlineStr"><is><t>${v ? 'Да' : 'Не'}</t></is></c>`
+    if (typeof v === 'boolean') return `<c r="${ref}"${style} t="inlineStr"><is><t>${v ? 'Да' : 'Не'}</t></is></c>`
     return `<c r="${ref}"${style} t="inlineStr"><is><t xml:space="preserve">${xmlEscape(String(v))}</t></is></c>`
   }
   const all: Cell[][] = [headers, ...rows]
@@ -48,7 +58,7 @@ function sheetXml(headers: string[], rows: Cell[][]): string {
   const widths = headers
     .map((h, c) => {
       let w = h.length
-      for (let r = 0; r < Math.min(rows.length, 200); r++) w = Math.max(w, String(rows[r][c] ?? '').length)
+      for (let r = 0; r < Math.min(rows.length, 200); r++) { const x = rows[r][c]; w = Math.max(w, String((isStyled(x) ? x.v : x) ?? '').length) }
       return `<col min="${c + 1}" max="${c + 1}" width="${Math.min(60, Math.max(8, w + 2))}" customWidth="1"/>`
     })
     .join('')
@@ -154,11 +164,12 @@ export function buildXlsxBook(sheets: Sheet[]): Uint8Array {
       name: 'xl/styles.xml',
       data: enc.encode(
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
-          '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>' +
-          '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>' +
+          '<fonts count="3"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><b/><color rgb="FFB3261E"/><sz val="11"/><name val="Calibri"/></font></fonts>' +
+          '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFBEAE7"/><bgColor indexed="64"/></patternFill></fill></fills>' +
           '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
           '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
-          '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>' +
+          '<cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>' +
+          '<xf numFmtId="0" fontId="2" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/></cellXfs>' +
           '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>',
       ),
     },
