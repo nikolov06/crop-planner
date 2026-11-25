@@ -52,6 +52,7 @@ Crop Planner е уеб приложение за планиране на зем�
 - `20261118170000_recap_eco_schemes.sql` (`company.in_holding`; номенклатури `recap_crop_group` и `eco_scheme_rule` с RLS като `crop`/`season`; изгледи `v_recap_company_crop`, `v_recap_base_crop`)
 - `20261124120000_seed_import.sql` (импорт на сортове: `planting_seed.addon`, `variety.default_rate`, `variety_alias`, лог `seed_import`/`seed_import_item`, RPC `apply_seed_import` и `undo_seed_import`)
 - `20261125120000_seed_quality_offers.sql` (МХЗ и кълняемост в `variety` и `planting_seed`; `planting_seed.rate_kg_da_manual`; `v_seed_calc` с нови колони накрая – `need_t_base`, `packs_base`, `rate_kg_da_info` и др.; `supplier.is_own_production` с „Собствено производство“; оферти за семена – `offer.module = 'seed'`, `offer_line.variety_id`, `min_qty`, мерна единица `pack`; изглед `v_seed_price_selected`)
+- `20261125130000_seed_import_update.sql` (повторният импорт обновява реда в `planting_seed` – пази МХЗ, кълняемост, ръчна норма; партидата се маха само при смяна на сорта; `seed_import_item.new_updated_at` за отмяната; рапица във `v_seed_calc` – торби без МХЗ и без CEILING)
 
 Типът за геометрия е `extensions.geometry`.
 

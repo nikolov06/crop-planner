@@ -13,3 +13,4 @@ env.local.txt
 *.xlsx
 geom/
 supabase/imports/
+backups/

@@ -1,4 +1,4 @@
--- СУХА ПРОБА (ROLLBACK) на pending/20261125130000_seed_import_update.sql.
+-- СУХА ПРОБА (ROLLBACK) на migrations/20261125130000_seed_import_update.sql.
 -- Пуска се от корена на проекта:
 --   psql "$(cat supabase/.temp/pooler-url)" -f supabase/pending/20261125130000_seed_import_update_dry.sql
 -- Спира при първата грешка; при успех накрая пише „ПРОБАТА Е УСПЕШНА“ и връща всичко (ROLLBACK).
@@ -14,7 +14,7 @@ create temp table _cols_before as
    where table_schema = 'public' and table_name in ('v_seed_calc', 'v_seed_need');
 
 -- ---------- Миграцията ----------
-\ir 20261125130000_seed_import_update.sql
+\ir ../migrations/20261125130000_seed_import_update.sql
 
 -- ---------- 1. Колоните на изгледите са същите ----------
 do $$
@@ -162,6 +162,7 @@ end $$;
 
 -- 4г. редакция след импорта → отмяната се спира
 -- В една транзакция now() не се мени, затова тук updated_at се мести ръчно (само в пробата, с изключен тригер).
+set constraints all immediate;  -- отложените проверки (planting_seed_area) се пускат сега, иначе ALTER TABLE не минава
 alter table public.planting_seed disable trigger planting_seed_touch;
 update public.planting_seed set note = 'ръчна промяна', updated_at = updated_at + interval '1 minute' where planting_id = :'pl_id'::uuid;
 alter table public.planting_seed enable trigger planting_seed_touch;
